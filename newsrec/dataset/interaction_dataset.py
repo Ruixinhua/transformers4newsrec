@@ -6,31 +6,26 @@ import torch
 import numpy as np
 from torch.utils.data.dataset import Dataset
 
-from newsrec.utils import load_dataset_from_csv, news_sampling
+from newsrec.utils import load_dataset_from_csv, news_sampling, load_user_history_mapper
 
 
 class UserInteractionDataset(Dataset):
     def __init__(self, **kwargs):
-        self.subset_name = kwargs.get("subset_name", "small")
+        self.subset_name = kwargs.get("subset_name")
         self.split = kwargs.get("split", "train")
         self.neg_sample_num = kwargs.get("neg_sample_num", 4)
         max_history_size = kwargs.get("max_history_size", 50)
-        self.user_interaction = load_dataset_from_csv(f"user_interaction_{self.subset_name}")
         self.impression = load_dataset_from_csv(f"{self.split}_{self.subset_name}")
         self.uid = np.array(self.impression["uid"], dtype=np.int32)
         if self.split == "train":
             self.positive = np.array(self.impression["positive"], dtype=np.int32)
-            self.negative = list(self.impression["negative"])
+            self.negative = [[int(n) for n in neg.split()] for neg in list(self.impression["negative"])]
         else:
-            self.interaction = list(self.impression["impressions"])
-        self.user_history_mapper = np.zeros((len(self.user_interaction) + 1, max_history_size), dtype=np.int32)
-        # fetch uid and history to two lists
-        history_nid, history_uid = list(self.user_interaction["history"]), list(self.user_interaction["uid"])
-        for index in range(len(self.user_interaction)):
-            history = history_nid[index]
-            history = history.split() if history else [0]
-            history = history[-max_history_size:] + [0] * (max_history_size - len(history))
-            self.user_history_mapper[history_uid[index]] = np.asarray(history, dtype=np.int32)
+            impressions = [imp.split() for imp in list(self.impression["impressions"])]
+            self.candidate_nid = [np.asarray([i.split("-")[0] for i in imp], dtype=np.int32) for imp in impressions]
+            # -1 for unlabeled data
+            self.label = [[int(i.split("-")[1]) if "-" in i else -1 for i in imp] for imp in impressions]
+        self.user_history_mapper = load_user_history_mapper(**kwargs)
 
     def __getitem__(self, index):
         uid = self.uid[index]
@@ -38,15 +33,12 @@ class UserInteractionDataset(Dataset):
         history_mask = np.asarray(history_nid != 0, dtype=np.int8)
         if self.split == "train":
             pos = self.positive[index]
-            neg = self.negative[index].split()
-            candidate_nid = np.asarray(
-                [pos] + news_sampling(neg, self.neg_sample_num), dtype=np.int32
-            )
+            neg = self.negative[index]
+            candidate_nid = np.asarray([pos] + news_sampling(neg, self.neg_sample_num), dtype=np.int32)
             label = [1] + [0] * self.neg_sample_num
         else:
-            interaction = self.interaction[index].split()
-            candidate_nid = np.asarray([i.split("-")[0] for i in interaction], dtype=np.int32)
-            label = [int(i.split("-")[1]) if "-" in i else -1 for i in interaction]  # -1 for unlabeled data
+            candidate_nid = self.candidate_nid[index]
+            label = self.label[index]
         candidate_mask = np.asarray(candidate_nid != 0, dtype=np.int8)
         input_feat = {
             "uid": torch.tensor(uid, dtype=torch.int32),

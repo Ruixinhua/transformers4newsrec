@@ -5,7 +5,7 @@
 import torch
 from torch import nn
 
-from newsrec.utils import load_glove_embedding_matrix, load_tokenizer, load_feature_mapper
+from newsrec.utils import load_glove_embedding_matrix, load_tokenizer, load_feature_mapper, load_user_history_mapper
 
 
 class WordEmbedding(nn.Module):
@@ -74,6 +74,9 @@ class FeatureEmbedding(nn.Module):
         self.embed_dim = self.title_len + self.abstract_len + self.body_len + 2
         feature_mapper = load_feature_mapper(**kwargs)
         self.tokenizer = feature_mapper.tokenizer
+        self.category_mapper = feature_mapper.category_mapper
+        self.subvert_mapper = feature_mapper.subvert_mapper
+        self.length = len(feature_mapper.feature_matrix)
         self.embedding = nn.Embedding.from_pretrained(torch.LongTensor(feature_mapper.feature_matrix), freeze=True)
 
     def forward(self, nid):
@@ -92,7 +95,44 @@ class FeatureEmbedding(nn.Module):
         """
         text_len = self.title_len + self.abstract_len + self.body_len
         return {
-            "title": f_vec[:, :, :self.title_len], "body": f_vec[:, :, self.title_len+self.abstract_len:text_len],
-            "abstract": f_vec[:, :, self.title_len:self.title_len+self.abstract_len],
-            "category": f_vec[:, :, text_len], "subvert": f_vec[:, :, text_len+1]
+            "title": f_vec[..., :self.title_len], "body": f_vec[..., self.title_len+self.abstract_len:text_len],
+            "abstract": f_vec[..., self.title_len:self.title_len+self.abstract_len],
+            "category": f_vec[..., text_len], "subvert": f_vec[..., text_len+1]
         }
+
+    def __len__(self):
+        return self.length
+
+
+class UserHistoryEmbedding(nn.Module):
+    def __init__(self, **kwargs):
+        super(UserHistoryEmbedding, self).__init__()
+        self.user_history_mapper = load_user_history_mapper(**kwargs)
+        self.length = len(self.user_history_mapper)
+        self.embedding = nn.Embedding.from_pretrained(torch.LongTensor(self.user_history_mapper), freeze=True)
+
+    def forward(self, uid):
+        return self.embedding(uid)
+
+    def __len__(self):
+        return self.length
+
+
+class FrozenEmbedding(nn.Module):
+    def __init__(self, num_embeddings, embedding_dim, embedding_matrix=None, **kwargs):
+        super(FrozenEmbedding, self).__init__()
+        if embedding_matrix:
+            self.embedding = nn.Embedding.from_pretrained(torch.FloatTensor(embedding_matrix), freeze=True)
+        else:
+            self.length = num_embeddings
+            self.embedding = nn.Embedding(num_embeddings, embedding_dim, **kwargs)
+            # Freeze the parameters of the embedding layer
+            for param in self.embedding.parameters():
+                param.requires_grad = False
+
+    def forward(self, x):
+        return self.embedding(x)
+
+    def __len__(self):
+        return self.length
+

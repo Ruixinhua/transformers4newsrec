@@ -183,3 +183,20 @@ def load_feature_mapper(**kwargs):
         with open(feature_mapper_path, "wb") as f:
             pickle.dump(feature_mapper, f)
     return feature_mapper
+
+
+def load_user_history_mapper(**kwargs):
+    subset_name = kwargs.get("subset_name")
+    max_history_size = kwargs.get("max_history_size")
+    if subset_name is None or max_history_size is None:
+        raise ValueError("subset_name and max_history_size must be provided")
+    user_interaction = load_dataset_from_csv(f"user_interaction_{subset_name}")
+    user_history_mapper = np.zeros((len(user_interaction) + 1, max_history_size), dtype=np.int32)
+    # fetch uid and history to two lists
+    history_nid, history_uid = list(user_interaction["history"]), list(user_interaction["uid"])
+    for index in range(len(user_interaction)):
+        history = history_nid[index]
+        history = history.split() if history else [0]
+        history = history[-max_history_size:] + [0] * (max_history_size - len(history))
+        user_history_mapper[history_uid[index]] = np.asarray(history, dtype=np.int32)
+    return user_history_mapper
