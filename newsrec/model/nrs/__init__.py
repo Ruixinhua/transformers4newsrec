@@ -4,3 +4,4 @@ from .lstur import *
 from .naml import *
 from .npa import *
 # from .dkn import *
+from .glory import *

@@ -56,11 +56,11 @@ class BaseNRS(BaseModel):
     def text_feature_encoder(self, input_feat):
         """
         Encode text feature of news using word embedding layer
-        :param input_feat: nid = history_nid + candidate_nid (training); shape = (B, H), (B, C);
-        :return: word vector of news, shape = (B, H+C, E), E is word embedding dimension
+        :param input_feat: nid = history_nid + candidate_nid (training); shape = (B*(H+C));
+        :return: word vector of news, shape = (B*(H+C), L, E), L is text length; E is word embedding dimension
         """
         # concat history news and candidate news
-        news_all_feature = self.feature_embedding(input_feat["nid"])  # shape = (B, H+C, F)
+        news_all_feature = self.feature_embedding(input_feat["nid"])  # shape = (B*(H+C), F)
         news_feature_dict = self.feature_embedding.select_feature(news_all_feature)
         news_tokens = torch.cat([news_feature_dict[feature] for feature in self.text_feature], dim=-1)
         # news_tokens: shape = (B, H+C, F), F is the sum of feature used in news
@@ -102,6 +102,33 @@ class BaseNRS(BaseModel):
         loss = self.criterion(prediction, label)
         return loss
 
+    @staticmethod
+    def get_mapping_index(unique_nid, *batch_nid):
+        nid_mapper = torch.full((unique_nid.max().item() + 1,), -1, dtype=torch.long)
+        nid_mapper[unique_nid] = torch.arange(unique_nid.size(0))
+        nid_mapper = nid_mapper.to(batch_nid[0].device)
+        return (nid_mapper[nid] for nid in batch_nid)
+
+    @staticmethod
+    def get_mapping_vector(source_vectors, mapping_idx):
+        mask = (mapping_idx == -1)
+        # add extra dimension for mask if the dimension of mask is less than source_vectors
+        if len(mask.shape) <= len(source_vectors.shape):
+            mask = mask.unsqueeze(-1)
+        return source_vectors[mapping_idx, ...].masked_fill(mask, 0)
+
+    def build_input_feat(self, input_feat):
+        history_nid, history_mask = input_feat["history_nid"], input_feat["history_mask"]
+        candidate_nid, candidate_mask = input_feat["candidate_nid"], input_feat["candidate_mask"]
+        history_selected = torch.masked_select(history_nid, history_mask == 1)  # select history based on mask
+        candidate_selected = torch.masked_select(candidate_nid, candidate_mask == 1)  # select candidate based on mask
+        # get unique news id in batch of history and candidate
+        input_feat["nid"] = torch.unique(torch.cat((history_selected, candidate_selected), dim=0))
+        input_feat["history_mapping"], input_feat["candidate_mapping"] = self.get_mapping_index(
+            input_feat["nid"], history_nid, candidate_nid
+        )  # -1 means zero padding; history_mapping: B, H; candidate_mapping: B, C
+        return input_feat
+
     def forward(self, uid, history_nid, candidate_nid, history_mask, candidate_mask, **kwargs):
         """
         B is batch size, H is maximum history size, C is candidate size, F is feature size
@@ -115,8 +142,9 @@ class BaseNRS(BaseModel):
         if self.training:  # keep load embedding to false when training
             self.load_embedding = False
         input_feat = {"uid": uid, "history_nid": history_nid, "candidate_nid": candidate_nid,
-                      "history_mask": history_mask, "candidate_mask": candidate_mask,
-                      "nid": torch.cat((history_nid, candidate_nid), dim=1)}
+                      "history_mask": history_mask, "candidate_mask": candidate_mask}
+        input_feat = self.build_input_feat(input_feat)
+        # input_feat["nid"] = torch.cat((history_nid, candidate_nid), dim=1)
         if not self.training and not self.load_embedding and self.fast_evaluation:
             """run model to generate embedding caches for evaluation"""
             self.load_embedding = True
@@ -142,14 +170,17 @@ class BaseNRS(BaseModel):
             candidate_news_vector = self.news_embedding(candidate_nid)
             user_vector = self.uid_embedding(uid)
         else:
-            output_dict = self.news_encoder(input_feat)  # shape = (B*(H+C), E)
-            news_vector = output_dict["news_vector"]
-            # reshape news vector to history news vector and candidate news vector -> (B, H+C, E)
-            news_vector = reshape_tensor(news_vector, (uid.size(0), -1, news_vector.size(-1)))
-            input_feat["history_news"] = news_vector[:, :history_nid.size(1), :]
-            output_dict.update(self.user_encoder(input_feat))
-            user_vector = output_dict["user_vector"]
-            candidate_news_vector = news_vector[:, history_nid.size(1):, :]
+            news_vector = self.news_encoder(input_feat)["news_vector"]  # shape = (B*(H+C), E)
+            # news_vector = reshape_tensor(news_vector, (uid.size(0), -1, news_vector.size(-1)))
+            # input_feat["history_news"] = news_vector[:, :history_nid.size(1), :]
+            # fetch history news vector from all news vectors
+            input_feat["history_news"] = self.get_mapping_vector(news_vector, input_feat["history_mapping"])
+            input_feat["news_vector"] = news_vector
+            # run user encoder
+            user_vector = self.user_encoder(input_feat)["user_vector"]
+            # candidate_news_vector = news_vector[:, history_nid.size(1):, :]
+            # fetch candidate news vector from all news vectors
+            candidate_news_vector = self.get_mapping_vector(news_vector, input_feat["candidate_mapping"])
         prediction = self.predict(candidate_news_vector, user_vector)
         loss = self.compute_loss(prediction, kwargs.get("label"))
         model_output = {"loss": loss, "prediction": prediction}

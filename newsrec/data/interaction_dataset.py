@@ -14,7 +14,6 @@ class UserInteractionDataset(Dataset):
         self.subset_name = kwargs.get("subset_name")
         self.split = kwargs.get("split", "train")
         self.neg_sample_num = kwargs.get("neg_sample_num", 4)
-        max_history_size = kwargs.get("max_history_size", 50)
         self.impression = load_dataset_from_csv(f"{self.split}_{self.subset_name}")
         self.uid = np.array(self.impression["uid"], dtype=np.int32)
         if self.split == "train":

@@ -4,7 +4,7 @@
 # @Function      : Basic Trainer class inherited from transformers.trainer
 from datetime import datetime
 from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
-from newsrec.dataset import UserInteractionDataset
+from newsrec.data import *
 from newsrec.utils import collate_fn, init_model_class, get_project_root, compute_metrics
 
 
@@ -37,7 +37,7 @@ class NRSTrainer(Trainer):
             "accelerator_config": accelerator_config,
             "log_level": "info",
             "learning_rate": 0.001,
-            "per_device_train_batch_size": 64,
+            "per_device_train_batch_size": 16,
             "gradient_accumulation_steps": 4,
             "per_device_eval_batch_size": 256,
             "logging_steps": 50,
@@ -46,7 +46,7 @@ class NRSTrainer(Trainer):
             "evaluation_strategy": "epoch",  # epoch/steps
             "save_strategy": "epoch",
             "eval_steps": 100,
-            "num_train_epochs": 1,
+            "num_train_epochs": 3,
             "metric_for_best_model": "eval_monitor_metric",
             "label_names": ["label"],
             "report_to": "all",  # "all": all installed integrations, default use wandb
@@ -78,19 +78,16 @@ def optuna_hp_space(trial):
 
 if __name__ == "__main__":
     override_kwargs = {
-        "model_name": "NPARSModel",  # NRMSRSModel/BaseNRS/LSTURRSModel/NAMLRSModel/NPARSModel
-        "user_embed_method": "concat",  # init/concat
-        "text_feature": ["title", "body"],  # ["title", "abstract", "body"]
-        "cat_feature": ["category", "subvert"],  # ["category", "subvert"]
+        "model_name": "GLORYRSModel",  # NRMSRSModel/BaseNRS/LSTURRSModel/NAMLRSModel/NPARSModel/GLORYRSModel
+        # "user_embed_method": "concat",  # init/concat
+        "text_feature": ["title"],  # ["title", "abstract", "body"]
+        # "cat_feature": ["category", "subvert"],  # ["category", "subvert"]
         "subset_name": "small", "max_history_size": 50, "title_len": 30, "abstract_len": 0, "body_len": 70,
-        "use_cached_feature_mapper": True, "fast_evaluation": False,
-        "per_device_eval_batch_size": 32, "news_batch_size": 1024, "user_batch_size": 256
+        "use_cached_feature_mapper": True, "fast_evaluation": False, "use_cached_news_graph": True,
+        "per_device_eval_batch_size": 64, "news_batch_size": 1024, "user_batch_size": 256
     }
     trainer = NRSTrainer(**override_kwargs)
-    # import time
-    # start = time.time()
-    trainer.evaluate(ignore_keys=trainer.ignore_keys_for_eval)
-    # print(f"evaluation time: {time.time() - start} seconds")
+    # trainer.evaluate(ignore_keys=trainer.ignore_keys_for_eval)
     trainer.train(ignore_keys_for_eval=trainer.ignore_keys_for_eval)
     # best_trials = trainer.hyperparameter_search(
     #     n_trials=4, backend="optuna", hp_space=optuna_hp_space, direction="maximize"

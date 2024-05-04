@@ -54,20 +54,23 @@ class ClickPredictor(nn.Module):
 
 class AttLayer(nn.Module):
 
-    def __init__(self, word_emb_dim, attention_hidden_dim):
+    def __init__(self, emb_dim, attention_hidden_dim):
         super().__init__()
         # build attention network
         self.attention = nn.Sequential(
-            nn.Linear(word_emb_dim, attention_hidden_dim, bias=True),
+            nn.Linear(emb_dim, attention_hidden_dim, bias=True),
             nn.Tanh(),
             nn.Linear(attention_hidden_dim, 1, bias=True),
-            nn.Softmax(dim=-2)
         )
 
-    def forward(self, x):
+    def forward(self, x, x_mask=None):
         attention_weight = self.attention(x)
+        attention_weight = torch.exp(attention_weight)
+        if x_mask is not None:
+            attention_weight = attention_weight * x_mask.unsqueeze(dim=-1)
+        attention_weight = attention_weight / (torch.sum(attention_weight, dim=1, keepdim=True) + 1e-8)
         y = torch.sum(x * attention_weight, dim=-2)
-        return y, attention_weight
+        return y, attention_weight.squeeze(-1)
 
 
 class PersonalizedAttentivePooling(nn.Module):
@@ -118,10 +121,18 @@ class MultiHeadedAttention(nn.Module):
         return torch.matmul(p_attn, value), p_attn
 
     def forward(self, query, key, value, mask=None):
-        "Implements Figure 2"
+        """
+
+        :param query: batch_size, word_num, word_dim
+        :param key: batch_size, word_num, word_dim
+        :param value: batch_size, word_num, word_dim
+        :param mask: batch_size, word_num
+        :return: output: batch_size, word_num, word_dim; weight:
+        """
         if mask is not None:
             # Same mask applied to all h heads.
-            mask = mask.unsqueeze(1)
+            # mask = mask.unsqueeze(1)
+            mask = mask.unsqueeze(dim=1).expand(-1, self.h, -1).unsqueeze(-1)
         nbatches = query.size(0)
 
         # 1) Do all the linear projections in batch from d_model => h x d_k

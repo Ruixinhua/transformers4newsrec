@@ -2,10 +2,12 @@
 # @Author        : Rui
 # @Time          : 2024/4/14 15:25
 # @Function      : Define the utils functions processing news data
+import json
+import pickle
 import pandas as pd
 import numpy as np
-import pickle
 from pathlib import Path
+from typing import Union
 from datasets import Dataset as HFDataset
 from newsrec.utils import get_project_root
 
@@ -131,21 +133,52 @@ def load_glove_embedding_matrix(**kwargs):
     return glove_embeddings
 
 
+def load_entity_dict(subset_name: str, entity_feature: Union[str, list] = "entity"):
+    """
+    load entity dictionary from mind dataset
+    :param subset_name: subset name of the dataset
+    :param entity_feature: entity feature name in the dataset, should be entity or ab_entity
+    :return: entity dictionary
+    """
+    entity_ids = ["[UNK]"]
+    news_data = load_dataset_from_csv(f"news_{subset_name}")
+    entity_feature = [entity_feature] if isinstance(entity_feature, str) else entity_feature
+    for feature in entity_feature:
+        for entity in list(news_data[feature]):
+            if entity:
+                entity_dict = json.loads(entity)
+                entity_ids.extend([obj["WikidataId"] for obj in entity_dict])
+    entity_ids = set(entity_ids)
+    return dict(zip(entity_ids, range(0, len(entity_ids))))
+
+
 class FeatureMapper:
+
+    def get_entity_matrix(self):
+        start = self.title_length + self.abstract_length + self.body_length + 2
+        return self.feature_matrix[..., start:]
+
     def __init__(self, **kwargs):
         self.subset_name = kwargs.get("subset_name", "small")
         self.title_length = kwargs.get("title_len", 30)
         self.abstract_length = kwargs.get("abstract_len", 30)
         self.body_length = kwargs.get("body_len", 100)
         self.tokenizer = load_tokenizer(**kwargs)
+        self.entity_feature = kwargs.get("entity_feature")  # entity: title entity; ab_entity: plus abstract
         # feature include: title, abstract, body, category(1), subcategory(1)
         self.feature_dim = self.title_length + self.abstract_length + self.body_length + 2
+        if self.entity_feature is not None:
+            self.entity_length = kwargs.get("entity_len", 5)
+            self.entity_feature = [self.entity_feature] if isinstance(self.entity_feature, str) else self.entity_feature
+            self.entity_dict = load_entity_dict(self.subset_name, self.entity_feature)
+            self.feature_dim += (self.entity_length * len(self.entity_feature))
         news_data = load_dataset_from_csv(f"news_{self.subset_name}")
         self.feature_matrix = np.zeros((len(news_data) + 1, self.feature_dim), dtype=np.int32)
         category, subvert, nid = list(news_data["category"]), list(news_data["subvert"]), list(news_data["nid"])
         self.category_mapper = {c: i + 1 for i, c in enumerate(set(category))}
         self.subvert_mapper = {s: i + 1 for i, s in enumerate(set(subvert))}
         title, abstract, body = list(news_data["title"]), list(news_data["abstract"]), list(news_data["body"])
+        entity_lists = {"entity": list(news_data["entity"]), "ab_entity": list(news_data["ab_entity"])}
         for index in range(len(news_data)):
             title_tokens = self.tokenizer.encode(title[index])[:self.title_length]
             title_tokens += [0] * (self.title_length - len(title_tokens))
@@ -155,9 +188,18 @@ class FeatureMapper:
             body_tokens += [0] * (self.body_length - len(body_tokens))
             category_id = self.category_mapper[category[index]]
             subvert_id = self.subvert_mapper[subvert[index]]
-            self.feature_matrix[nid[index]] = np.concatenate(
-                [title_tokens, abstract_tokens, body_tokens, [category_id, subvert_id]]
-            )
+            data = [title_tokens, abstract_tokens, body_tokens, [category_id, subvert_id]]
+            if self.entity_feature is not None:
+                for e_f in self.entity_feature:
+                    entity_line = entity_lists[e_f][index]
+                    if entity_line and len(entity_line):
+                        entity_tokens = [self.entity_dict[obj["WikidataId"]] for obj in json.loads(entity_line)]
+                    else:
+                        entity_tokens = [self.entity_dict["[UNK]"]]
+                    entity_tokens = entity_tokens[:self.entity_length]
+                    entity_tokens += [0] * (self.entity_length - len(entity_tokens))
+                    data.append(entity_tokens)
+            self.feature_matrix[nid[index]] = np.concatenate(data)
 
 
 def load_feature_mapper(**kwargs):
@@ -170,7 +212,14 @@ def load_feature_mapper(**kwargs):
     title_len, subset_name = kwargs.get("title_len", 30), kwargs.get('subset_name', 'small')
     abstract_len, body_len = kwargs.get("abstract_len", 30), kwargs.get("body_len", 100)
     embed_dim = title_len + abstract_len + body_len + 2
-    feature_mapper_path = Path(f"{get_project_root()}/cached/feature_{embed_dim}d_{subset_name}.bin")
+    if kwargs.get("entity_len"):
+        entity_feature = kwargs.get("entity_feature")
+        entity_feature = [entity_feature] if isinstance(entity_feature, str) else entity_feature
+        embed_dim += (kwargs.get("entity_len") * len(entity_feature))
+    tokenizer_name = kwargs.get("embedding_type", "glove")
+    if tokenizer_name == "plm":  # pre-trained LM: use corresponding embedding model name
+        tokenizer_name = kwargs.get("embedding_model")
+    feature_mapper_path = Path(f"{get_project_root()}/cached/FM_{tokenizer_name}_{embed_dim}d_{subset_name}.bin")
     feature_mapper = None
     if feature_mapper_path.exists() and use_cached_feature_mapper:
         with open(feature_mapper_path, "rb") as f:
@@ -186,6 +235,11 @@ def load_feature_mapper(**kwargs):
 
 
 def load_user_history_mapper(**kwargs):
+    """
+    Load user history mapper from cached file or create a new one
+    :param kwargs: subset_name, max_history_size
+    :return: user_history_mapper with size (num_users, max_history_size)
+    """
     subset_name = kwargs.get("subset_name")
     max_history_size = kwargs.get("max_history_size")
     if subset_name is None or max_history_size is None:
