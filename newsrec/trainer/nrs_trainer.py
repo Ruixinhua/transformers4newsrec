@@ -37,8 +37,8 @@ class NRSTrainer(Trainer):
             "accelerator_config": accelerator_config,
             "log_level": "info",
             "learning_rate": 0.001,
-            "per_device_train_batch_size": 16,
-            "gradient_accumulation_steps": 4,
+            "per_device_train_batch_size": 64,
+            "gradient_accumulation_steps": 2,
             "per_device_eval_batch_size": 256,
             "logging_steps": 50,
             "save_steps": 1000,
@@ -46,7 +46,7 @@ class NRSTrainer(Trainer):
             "evaluation_strategy": "epoch",  # epoch/steps
             "save_strategy": "epoch",
             "eval_steps": 100,
-            "num_train_epochs": 3,
+            "num_train_epochs": 5,
             "metric_for_best_model": "eval_monitor_metric",
             "label_names": ["label"],
             "report_to": "all",  # "all": all installed integrations, default use wandb
@@ -84,7 +84,7 @@ if __name__ == "__main__":
         # "cat_feature": ["category", "subvert"],  # ["category", "subvert"]
         "subset_name": "small", "max_history_size": 50, "title_len": 30, "abstract_len": 0, "body_len": 70,
         "use_cached_feature_mapper": True, "fast_evaluation": False, "use_cached_news_graph": True,
-        "per_device_eval_batch_size": 64, "news_batch_size": 1024, "user_batch_size": 256
+        "per_device_eval_batch_size": 128, "news_batch_size": 1024, "user_batch_size": 256
     }
     trainer = NRSTrainer(**override_kwargs)
     # trainer.evaluate(ignore_keys=trainer.ignore_keys_for_eval)
