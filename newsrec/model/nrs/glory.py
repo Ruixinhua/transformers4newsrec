@@ -18,6 +18,11 @@ class GLORYRSModel(BaseNRS):
         self.embedding_dim = kwargs.get("embedding_dim", self.head_num * self.head_dim)
         super().__init__(**kwargs)
         word_embed_dim = self.word_embedding.embed_dim
+        self.news_encode_layer = MultiHeadedAttention(self.head_num, self.head_dim, word_embed_dim)
+        self.user_layer_name = kwargs.get("user_layer_name", "mha")
+        if self.user_layer_name == "mha":
+            self.user_encode_layer = MultiHeadedAttention(self.head_num, self.head_dim, self.embedding_dim)
+
         self.local_news_encoder = Sequential("x", [  # TODO: add news mask
             (MultiHeadedAttention(self.head_num, self.head_dim, word_embed_dim), "x,x,x -> x,x_att"),
             # (nn.LayerNorm(self.embedding_dim), "x->x"),  # TODO: Fix layer norm problem
@@ -38,11 +43,11 @@ class GLORYRSModel(BaseNRS):
             (GatedGraphConv(self.embedding_dim, num_layers=3, aggr="add"), "x,index -> x"),
         ])
         self.aggregator_encoder = AttLayer(self.embedding_dim, self.attention_hidden_dim)
-        self.user_layer = Sequential("x", [
-            (MultiHeadedAttention(self.head_num, self.head_dim, self.embedding_dim), 'x,x,x -> x,x_att'),
-            (AttLayer(self.embedding_dim, self.attention_hidden_dim), "x -> x,x_att"),
-        ])
-        self.news_layer = None  # news_layer is not used, so set to None
+        # self.user_layer = Sequential("x", [
+        #     (MultiHeadedAttention(self.head_num, self.head_dim, self.embedding_dim), 'x,x,x -> x,x_att'),
+        #     (AttLayer(self.embedding_dim, self.attention_hidden_dim), "x -> x,x_att"),
+        # ])
+        # self.news_layer = None  # news_layer is not used, so set to None
 
     def build_input_feat(self, input_feat):
         history_nid, history_mask = input_feat["history_nid"], input_feat["history_mask"]
@@ -75,18 +80,26 @@ class GLORYRSModel(BaseNRS):
         return input_feat
 
     def news_encoder(self, input_feat):
+        """
+        Encode news using text feature encoder and news attention layer
+        :param input_feat: history_nid, candidate_nid; shape = (B, H), (B, C);
+        :return: news vector, shape = (B*(H+C), E); news weight, shape = (B*(H+C), F)
+        """
         word_vector, news_mask = self.text_feature_encoder(input_feat)  # shape = (B*(H+C), F, E)
-        output = self.local_news_encoder(word_vector)
+        y = self.news_encode_layer(word_vector, word_vector, word_vector)[0]  # shape = (B*(H+C), F, D)
+        y = self.dropout_ne(y)
+        # add activation function
+        output = self.news_layer(y)
         return {"news_vector": output[0], "news_weight": output[1]}
 
     def user_encoder(self, input_feat):
-        local_history_news = input_feat["history_news"]
+        local_history_news = input_feat["history_news"]  # shape = (B, H, D)
         sub_news_vector = self.get_mapping_vector(input_feat["news_vector"], input_feat["sub_graph_news_mapping"])
         graph_vector = self.global_news_encoder(sub_news_vector, input_feat["sub_graph"].edge_index)
-        # (history_mapping, ) = self.get_mapping_index(input_feat["sub_graph_news_mapping"], input_feat["history_nid"])
         graph_vector_batch = self.get_mapping_vector(graph_vector, input_feat["history_graph_mapping"])
         stacked_vector = torch.stack([local_history_news, graph_vector_batch], dim=-2).view(-1, 2, self.embedding_dim)
         batch_size = local_history_news.shape[0]
         aggregator_vector = self.aggregator_encoder(stacked_vector)[0].view(batch_size, -1, self.embedding_dim)
-        user_vector, user_weight = self.user_layer(aggregator_vector)
-        return {"user_vector": user_vector, "user_weight": user_weight}
+        y = self.user_encode_layer(aggregator_vector, aggregator_vector, aggregator_vector)[0]  # shape = (B, H, D)
+        y = self.user_layer(y)  # additive attention layer: shape = (B, D)
+        return {"user_vector": y[0], "user_weight": y[1]}
