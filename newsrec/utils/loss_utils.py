@@ -15,6 +15,12 @@ def cross_entropy(predict, target):
     return F.cross_entropy(predict, target)
 
 
+def nce_loss(predict, target):
+    if len(target.shape) == 2:
+        target = target.argmax(dim=-1)
+    return F.nll_loss(F.log_softmax(predict, dim=-1), target)
+
+
 def categorical_loss(predict, target, epsilon=1e-12):
     """
     Computes cross entropy between target (encoded as one-hot vectors) and prediction.

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from newsrec.model.base_model import BaseModel
 from newsrec.model.general import WordEmbedding, FeatureEmbedding, FrozenEmbedding, UserHistoryEmbedding
 from newsrec.model.general import ClickPredictor, AttLayer
-from newsrec.utils import reshape_tensor, load_tokenizer
+from newsrec.utils import reshape_tensor, load_tokenizer, load_entity_embedding_matrix
 
 
 class BaseNRS(BaseModel):
@@ -37,6 +37,13 @@ class BaseNRS(BaseModel):
         # news feature can be used: title, abstract, body, category, subvert
         self.text_feature = kwargs.get("text_feature", ["title"])
         self.cat_feature = kwargs.get("cat_feature", [])
+        self.entity_feature = kwargs.get("entity_feature")
+        self.use_layernorm = kwargs.get("use_layernorm", False)  # whether to use layernorm in attention layer
+        self.use_flash_att = kwargs.get("use_flash_att", False)
+        self.use_news_mask = kwargs.get("use_news_mask", False)  # whether to use news mask
+        self.use_user_mask = kwargs.get("use_user_mask", False)  # whether to use user mask
+        if isinstance(self.entity_feature, str):
+            self.entity_feature = self.entity_feature.split(",")  # split entity feature by ","
         if self.cat_feature and len(self.cat_feature):
             self.category_dim = kwargs.get("category_dim", 100)
             if "category" in self.cat_feature:
@@ -45,6 +52,15 @@ class BaseNRS(BaseModel):
             if "subvert" in self.cat_feature:
                 sub_len = len(self.feature_embedding.subvert_mapper) + 1
                 self.subvert_embedding = nn.Embedding(sub_len, self.category_dim)
+        if self.entity_feature:
+            entity_embed_matrix = load_entity_embedding_matrix(self.feature_embedding.entity_dict, **kwargs)
+            self.entity_dim = entity_embed_matrix.shape[1]
+            self.entity_embedding = nn.Embedding.from_pretrained(
+                torch.FloatTensor(entity_embed_matrix), freeze=False, padding_idx=0
+            )
+        if self.use_layernorm:
+            # self.multi_layer_norm = nn.LayerNorm(self.embedding_dim)
+            self.att_layer_norm = nn.LayerNorm(self.embedding_dim)
         # self.uid_feature = kwargs.get("uid_feature")
         self.attention_hidden_dim = kwargs.get("attention_hidden_dim", 200)
         self.dropout_we = nn.Dropout(kwargs.get("dropout_we", 0.2))  # dropout for word embedding
@@ -120,8 +136,8 @@ class BaseNRS(BaseModel):
     def build_input_feat(self, input_feat):
         history_nid, history_mask = input_feat["history_nid"], input_feat["history_mask"]
         candidate_nid, candidate_mask = input_feat["candidate_nid"], input_feat["candidate_mask"]
-        history_selected = torch.masked_select(history_nid, history_mask == 1)  # select history based on mask
-        candidate_selected = torch.masked_select(candidate_nid, candidate_mask == 1)  # select candidate based on mask
+        history_selected = torch.masked_select(history_nid, history_mask)  # select history based on mask
+        candidate_selected = torch.masked_select(candidate_nid, candidate_mask)  # select candidate based on mask
         # get unique news id in batch of history and candidate
         input_feat["nid"] = torch.unique(torch.cat((history_selected, candidate_selected), dim=0))
         input_feat["history_mapping"], input_feat["candidate_mapping"] = self.get_mapping_index(
@@ -161,8 +177,7 @@ class BaseNRS(BaseModel):
             for u in user_loader:
                 h_nid = self.user_history(u)
                 history_news = self.news_embedding(h_nid)
-                history_mask = torch.tensor(h_nid != 0, dtype=torch.int8).to(uid.device)
-                user_input = {"uid": u, "history_mask": history_mask, "history_news": history_news}
+                user_input = {"uid": u, "history_mask": h_nid != 0, "history_news": history_news}
                 user_embedding[u] = self.user_encoder(user_input)["user_vector"]
             self.uid_embedding.embedding = nn.Embedding.from_pretrained(user_embedding, freeze=True).to(uid.device)
             torch.cuda.empty_cache()  # empty cuda cache
@@ -170,17 +185,20 @@ class BaseNRS(BaseModel):
             candidate_news_vector = self.news_embedding(candidate_nid)
             user_vector = self.uid_embedding(uid)
         else:
-            news_vector = self.news_encoder(input_feat)["news_vector"]  # shape = (B*(H+C), E)
+            news_feature = self.news_encoder(input_feat)  # shape = (B*(H+C), E)
+            news_vector = news_feature["news_vector"]
             # news_vector = reshape_tensor(news_vector, (uid.size(0), -1, news_vector.size(-1)))
             # input_feat["history_news"] = news_vector[:, :history_nid.size(1), :]
             # fetch history news vector from all news vectors
             input_feat["history_news"] = self.get_mapping_vector(news_vector, input_feat["history_mapping"])
-            input_feat["news_vector"] = news_vector
+            input_feat.update({"news_vector": news_vector, "entity_vector": news_feature.get("entity_vector")})
             # run user encoder
-            user_vector = self.user_encoder(input_feat)["user_vector"]
+            output_dict = self.user_encoder(input_feat)
+            user_vector = output_dict["user_vector"]
             # candidate_news_vector = news_vector[:, history_nid.size(1):, :]
             # fetch candidate news vector from all news vectors
-            candidate_news_vector = self.get_mapping_vector(news_vector, input_feat["candidate_mapping"])
+            candidate_vector = self.get_mapping_vector(news_vector, input_feat["candidate_mapping"])
+            candidate_news_vector = output_dict.get("candidate_news_vector", candidate_vector)
         prediction = self.predict(candidate_news_vector, user_vector)
         loss = self.compute_loss(prediction, kwargs.get("label"))
         model_output = {"loss": loss, "prediction": prediction}

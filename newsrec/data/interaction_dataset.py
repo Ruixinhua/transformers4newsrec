@@ -42,9 +42,9 @@ class UserInteractionDataset(Dataset):
         input_feat = {
             "uid": torch.tensor(uid, dtype=torch.int32),
             "history_nid": torch.tensor(history_nid, dtype=torch.int32),
-            "history_mask": torch.tensor(history_mask, dtype=torch.int8),
+            "history_mask": torch.tensor(history_mask, dtype=torch.bool),
             "candidate_nid": torch.tensor(candidate_nid, dtype=torch.int32),
-            "candidate_mask": torch.tensor(candidate_mask, dtype=torch.int8),
+            "candidate_mask": torch.tensor(candidate_mask, dtype=torch.bool),
             "label": torch.tensor(label, dtype=torch.int8),
         }
         return input_feat

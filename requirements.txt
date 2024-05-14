@@ -1,7 +1,6 @@
 torch~=2.2.2+cu118
 numpy~=1.26.4
+torch_geometric~=2.5.3
 pandas~=2.2.1
 datasets~=2.18.0
 transformers~=4.39.3
-wandb~=0.16.6
-optuna~=3.6.1

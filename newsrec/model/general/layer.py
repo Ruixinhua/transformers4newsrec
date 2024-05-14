@@ -63,6 +63,11 @@ class AttLayer(nn.Module):
             nn.Linear(attention_hidden_dim, 1, bias=True),
         )
 
+    def initialize(self):
+        nn.init.xavier_uniform_(self.att_fc1.weight, gain=nn.init.calculate_gain('tanh'))
+        nn.init.zeros_(self.att_fc1.bias)
+        nn.init.xavier_uniform_(self.att_fc2.weight)
+
     def forward(self, x, x_mask=None):
         attention_weight = self.attention(x)
         attention_weight = torch.exp(attention_weight)
@@ -95,7 +100,7 @@ class MultiHeadedAttention(nn.Module):
     http://nlp.seas.harvard.edu/2018/04/03/attention.html#attention
     """
 
-    def __init__(self, h, d_k, word_dim, dropout=0):
+    def __init__(self, h, d_k, word_dim, dropout=0, use_flash_att=True):
         "Take in model size and number of heads."
         super(MultiHeadedAttention, self).__init__()
         # We assume d_v always equals d_k
@@ -107,15 +112,19 @@ class MultiHeadedAttention(nn.Module):
         self.final = nn.Linear(d_model, d_model)
         self.attn = None
         self.dropout = nn.Dropout(p=dropout)
+        self.use_flash_att = use_flash_att
+        self.apply(lambda layer: nn.init.xavier_uniform_(layer.weight) if isinstance(layer, nn.Linear) else None)
 
     @staticmethod
     def attention(query, key, value, mask=None, dropout=None):
         """Compute 'Scaled Dot Product Attention'"""
         d_k = query.size(-1)
         scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
+        scores = torch.exp(scores)
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
-        p_attn = torch.softmax(scores, dim=-1)
+            scores = scores * mask
+
+        p_attn = scores / (torch.sum(scores, dim=-1, keepdim=True) + 1e-8)
         if dropout is not None:
             p_attn = dropout(p_attn)
         return torch.matmul(p_attn, value), p_attn
@@ -135,16 +144,51 @@ class MultiHeadedAttention(nn.Module):
             mask = mask.unsqueeze(dim=1).expand(-1, self.h, -1).unsqueeze(-1)
         nbatches = query.size(0)
 
-        # 1) Do all the linear projections in batch from d_model => h x d_k
-        query, key, value = [liner(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
-                             for liner, x in zip(self.linears, (query, key, value))]
-
-        # 2) Apply attention on all the projected vectors in batch.
-        x, self.attn = self.attention(query, key, value, mask=mask, dropout=self.dropout)
+        if self.use_flash_att:
+            from flash_attn import flash_attn_qkvpacked_func
+            qkv = torch.stack([liner(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+                               for liner, x in zip(self.linears, (query, key, value))], dim=2)
+            x = flash_attn_qkvpacked_func(qkv)
+        else:
+            # 1) Do all the linear projections in batch from d_model => h x d_k
+            query, key, value = [liner(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+                                 for liner, x in zip(self.linears, (query, key, value))]
+            # 2) Apply attention on all the projected vectors in batch.
+            x, self.attn = self.attention(query, key, value, mask=mask, dropout=self.dropout)
 
         # 3) "Concat" using a view and apply a final linear.
         x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
         return self.final(x), self.attn
+
+
+class MultiFeatureAttentionFusion(nn.Module):
+    def __init__(self, feature_dims, fusion_dim):
+        super(MultiFeatureAttentionFusion, self).__init__()
+        self.feature_transforms = nn.ModuleList([
+            nn.Linear(dim, fusion_dim) for dim in feature_dims
+        ])
+        self.fusion_dim = fusion_dim
+        self.query = nn.Linear(fusion_dim, fusion_dim)
+        self.key = nn.Linear(fusion_dim, fusion_dim)
+        self.value = nn.Linear(fusion_dim, fusion_dim)
+
+    def forward(self, features):
+        # Transform each feature to the fusion dimension
+        transformed_features = [trans(feat) for trans, feat in zip(self.feature_transforms, features)]
+
+        # Concatenate all features
+        concat_features = torch.cat(transformed_features, dim=1)
+
+        # Apply attention
+        q = self.query(concat_features)
+        k = self.key(concat_features)
+        v = self.value(concat_features)
+
+        scores = torch.matmul(q, k.transpose(-2, -1)) / (self.fusion_dim ** 0.5)
+        attention_weights = torch.softmax(scores, dim=-1)
+        fused_feature = torch.matmul(attention_weights, v)
+
+        return fused_feature
 
 
 class Conv1D(nn.Module):

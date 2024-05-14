@@ -8,6 +8,7 @@ import omegaconf
 class Configuration:
     def __init__(self, **kwargs):
         self.config = omegaconf.OmegaConf.create(kwargs)
+        self.merge_with_cli()
 
     def __getitem__(self, item):
         return self.config[item]

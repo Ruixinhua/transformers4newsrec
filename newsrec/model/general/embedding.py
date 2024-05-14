@@ -73,6 +73,9 @@ class FeatureEmbedding(nn.Module):
         self.body_len = kwargs.get("body_len", 100)
         self.embed_dim = self.title_len + self.abstract_len + self.body_len + 2
         feature_mapper = load_feature_mapper(**kwargs)
+        self.entity_feature = kwargs.get("entity_feature")
+        if self.entity_feature:
+            self.entity_dict = feature_mapper.entity_dict
         self.tokenizer = feature_mapper.tokenizer
         self.category_mapper = feature_mapper.category_mapper
         self.subvert_mapper = feature_mapper.subvert_mapper
@@ -94,11 +97,14 @@ class FeatureEmbedding(nn.Module):
         :return: feature vectors of news
         """
         text_len = self.title_len + self.abstract_len + self.body_len
-        return {
+        feature_dict = {
             "title": f_vec[..., :self.title_len], "body": f_vec[..., self.title_len+self.abstract_len:text_len],
             "abstract": f_vec[..., self.title_len:self.title_len+self.abstract_len],
             "category": f_vec[..., text_len], "subvert": f_vec[..., text_len+1]
         }
+        if self.entity_feature:
+            feature_dict["entity"] = f_vec[..., text_len+2:]
+        return feature_dict
 
     def __len__(self):
         return self.length

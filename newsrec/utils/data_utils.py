@@ -133,6 +133,29 @@ def load_glove_embedding_matrix(**kwargs):
     return glove_embeddings
 
 
+def load_entity_embedding_matrix(entity_dict, **kwargs):
+    """
+    load entity embedding matrix from entity dictionary
+    :param entity_dict: entity mapping dictionary
+    :param kwargs: subset_name
+    :return: entity embedding matrix for the corresponding dictionary
+    """
+    if "[UNK]" not in entity_dict:
+        entity_dict["[UNK]"] = 0
+    entity_embedding = load_dataset_from_csv(f"entity_embedding_{kwargs.get('subset_name')}")
+    entity_embedding = entity_embedding.to_pandas()
+    entity_matrix = np.zeros((len(entity_dict), len(entity_embedding.columns) - 1))
+    entity_embedding.set_index("entity", inplace=True)
+    missing_rate = 0
+    for entity in entity_dict:
+        if entity in entity_embedding.index:
+            entity_matrix[entity_dict[entity]] = entity_embedding.loc[entity].values
+        else:
+            missing_rate += 1
+    print(f"Missing rate of entity embedding: {round(missing_rate / len(entity_dict), 4)}")
+    return entity_matrix
+
+
 def load_entity_dict(subset_name: str, entity_feature: Union[str, list] = "entity"):
     """
     load entity dictionary from mind dataset
@@ -140,7 +163,7 @@ def load_entity_dict(subset_name: str, entity_feature: Union[str, list] = "entit
     :param entity_feature: entity feature name in the dataset, should be entity or ab_entity
     :return: entity dictionary
     """
-    entity_ids = ["[UNK]"]
+    entity_ids = []
     news_data = load_dataset_from_csv(f"news_{subset_name}")
     entity_feature = [entity_feature] if isinstance(entity_feature, str) else entity_feature
     for feature in entity_feature:
@@ -148,7 +171,7 @@ def load_entity_dict(subset_name: str, entity_feature: Union[str, list] = "entit
             if entity:
                 entity_dict = json.loads(entity)
                 entity_ids.extend([obj["WikidataId"] for obj in entity_dict])
-    entity_ids = set(entity_ids)
+    entity_ids = ["[UNK]"] + list(set(entity_ids))
     return dict(zip(entity_ids, range(0, len(entity_ids))))
 
 

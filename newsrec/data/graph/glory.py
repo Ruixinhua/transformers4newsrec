@@ -15,16 +15,19 @@ from torch_geometric.utils import to_undirected, subgraph
 from newsrec.utils import load_dataset_from_csv, load_feature_mapper, get_project_root
 
 
-def load_neighbor_data(graph_data):
+def load_neighbor_data(graph_data, directed=True):
     """
     Load the neighbor mapper and weights from the graph data
     :param graph_data: the graph data, news_graph or entity_graph
+    :param directed: whether the graph is directed
     :return: neighbor_mapper, neighbor_weights
     """
     neighbor_mapper = defaultdict(list)
     neighbor_weights = defaultdict(list)
     edge_index = graph_data.edge_index
     edge_attr = graph_data.edge_attr
+    if directed is False:
+        edge_index, edge_attr = to_undirected(edge_index, edge_attr)
     for i in range(1, graph_data.num_nodes):
         dst_edges = torch.where(edge_index[1] == i)[0]  # i as dst
         weights = edge_attr[dst_edges]
@@ -46,11 +49,15 @@ class NewsGraph:
     def __init__(self, **kwargs):
         news_data = load_dataset_from_csv(f"news_{kwargs.get('subset_name')}")
         news_dict = dict(zip(news_data["news_id"], news_data["nid"]))
-        train_data = load_dataset_from_csv(f"train_{kwargs.get('subset_name')}")
         user_interaction_data = load_dataset_from_csv(f"user_interaction_{kwargs.get('subset_name')}")
         user_history = dict(zip(user_interaction_data["uid"], user_interaction_data["history"]))
-        train_users = set(train_data["uid"])
-        edge_list = [[int(h) for h in user_history[user].split()] for user in train_users]
+        news_graph_source = kwargs.get("news_graph_source", "all_users")
+        if news_graph_source == "all_users":
+            edge_list = [[int(h) for h in user_history[user].split()] for user in user_history]
+        else:
+            train_data = load_dataset_from_csv(f"train_{kwargs.get('subset_name')}")
+            train_users = set(train_data["uid"])
+            edge_list = [[int(h) for h in user_history[user].split()] for user in train_users]
         node_feat = np.asarray([0] + list(news_dict.values()))  # add zero for the padding nid
         graph_type = kwargs.get("graph_type", "trajectory")  # graph tye should be "trajectory" or "co_occurrence"
         short_edges = []
@@ -76,7 +83,6 @@ class NewsGraph:
             edge_attr=edge_attr,
             num_nodes=len(node_feat)
         )
-        self.neighbor_mapper, self.neighbor_weights = load_neighbor_data(self.graph_data)
 
 
 def load_news_graph(**kwargs):
@@ -94,6 +100,9 @@ def load_news_graph(**kwargs):
         news_graph = NewsGraph(**kwargs)
         with open(saved_news_graph_path, "wb") as file:
             pickle.dump(news_graph, file)
+    news_graph.neighbor_mapper, news_graph.neighbor_weights = load_neighbor_data(
+        news_graph.graph_data, kwargs.get("directed", True)
+    )
     return news_graph
 
 
@@ -125,7 +134,6 @@ class EntityGraph:
                                edge_index=edge_index,
                                edge_attr=edge_attr,
                                num_nodes=len(feature_mapper.entity_dict))
-        self.neighbor_mapper, self.neighbor_weights = load_neighbor_data(self.graph_data)
 
 
 def load_entity_graph(**kwargs):
@@ -140,13 +148,16 @@ def load_entity_graph(**kwargs):
     default_name = f"glory_entity_graph_{entity_name}_{kwargs.get('subset_name')}"
     default_path = f"{get_project_root()}/cached/{default_name}.bin"
     saved_entity_graph_path = Path(kwargs.get("saved_entity_graph_path", default_path))
-    if saved_entity_graph_path.exists():
+    if saved_entity_graph_path.exists() and kwargs.get("use_cached_entity_graph"):
         with open(saved_entity_graph_path, "rb") as file:
             entity_graph = pickle.load(file)
     else:
         entity_graph = EntityGraph(**kwargs)
         with open(saved_entity_graph_path, "wb") as file:
             pickle.dump(entity_graph, file)
+    entity_graph.neighbor_mapper, entity_graph.neighbor_weights = load_neighbor_data(
+        entity_graph.graph_data, kwargs.get("directed", True)
+    )
     return entity_graph
 
 

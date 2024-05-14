@@ -4,6 +4,7 @@
 # @Function      : Basic Trainer class inherited from transformers.trainer
 from datetime import datetime
 from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
+from omegaconf import OmegaConf
 from newsrec.data import *
 from newsrec.utils import collate_fn, init_model_class, get_project_root, compute_metrics
 
@@ -28,7 +29,7 @@ class NRSTrainer(Trainer):
             return init_model_class(model_name, model_config)
 
         accelerator_config = {
-            "split_batches": False, "dispatch_batches": True, "even_batches": True, "use_seedable_sampler": True
+            "split_batches": False, "dispatch_batches": False, "even_batches": True, "use_seedable_sampler": True
         }
         train_args_dict = {
             "output_dir": f"{get_project_root()}/output_dir/{model_name}/",
@@ -37,8 +38,7 @@ class NRSTrainer(Trainer):
             "accelerator_config": accelerator_config,
             "log_level": "info",
             "learning_rate": 0.001,
-            "per_device_train_batch_size": 64,
-            "gradient_accumulation_steps": 2,
+            "gradient_accumulation_steps": 1,
             "per_device_eval_batch_size": 256,
             "logging_steps": 50,
             "save_steps": 1000,
@@ -69,26 +69,46 @@ class NRSTrainer(Trainer):
         )
 
 
-def optuna_hp_space(trial):
-    return {
-        "learning_rate": trial.suggest_float("learning_rate", 1e-3, 1e-2, log=True),
-        "per_device_train_batch_size": trial.suggest_categorical("per_device_train_batch_size", [16, 32]),
-    }
-
-
 if __name__ == "__main__":
     override_kwargs = {
-        "model_name": "GLORYRSModel",  # NRMSRSModel/BaseNRS/LSTURRSModel/NAMLRSModel/NPARSModel/GLORYRSModel
+        "model_name": "NRMSRSModel",  # NRMSRSModel/BaseNRS/LSTURRSModel/NAMLRSModel/NPARSModel/GLORYRSModel
         # "user_embed_method": "concat",  # init/concat
         "text_feature": ["title"],  # ["title", "abstract", "body"]
+        "early_stopping_patience": 3, "directed": False,
         # "cat_feature": ["category", "subvert"],  # ["category", "subvert"]
         "subset_name": "small", "max_history_size": 50, "title_len": 30, "abstract_len": 0, "body_len": 70,
+        # "entity_feature": ["entity"],  # ["entity", "abstract"]
         "use_cached_feature_mapper": True, "fast_evaluation": False, "use_cached_news_graph": True,
-        "per_device_eval_batch_size": 128, "news_batch_size": 1024, "user_batch_size": 256
+        "per_device_eval_batch_size": 128, "news_batch_size": 1024, "user_batch_size": 256, "use_flash_att": False,
+        "per_device_train_batch_size": 64, "num_train_epochs": 5, "learning_rate": 0.001,
+        "loss": "categorical_loss"  # categorical_loss/nce_loss
     }
-    trainer = NRSTrainer(**override_kwargs)
+    config = OmegaConf.create(override_kwargs)
+    config.merge_with(OmegaConf.from_cli())
+    print(config)
+
+    trainer = NRSTrainer(**config)
+    running_mode = config.get("running_mode", "train")
+    if running_mode == "train":
+        trainer.train(ignore_keys_for_eval=trainer.ignore_keys_for_eval)
+    elif running_mode == "hyper_search":
+        def set_hp_name(trial):
+            run_name = config.get("run_name", f"{config.get('model_name')}")
+            for k, v in trial.params.items():
+                if isinstance(v, float):
+                    v = f"{v:.6f}"
+                run_name += f"_{v}"
+            return run_name
+
+        def optuna_hp_space(trial):
+            return {
+                "learning_rate": trial.suggest_float("learning_rate", 0.0001, 0.001, log=True),
+                "per_device_train_batch_size": trial.suggest_categorical("per_device_train_batch_size",
+                                                                         [16, 32, 64, 128]),
+            }
+        best_trials = trainer.hyperparameter_search(
+            n_trials=config.get("n_trials", 10), backend="optuna", hp_space=optuna_hp_space, direction="maximize",
+            hp_name=set_hp_name
+        )
+        print(best_trials)
     # trainer.evaluate(ignore_keys=trainer.ignore_keys_for_eval)
-    trainer.train(ignore_keys_for_eval=trainer.ignore_keys_for_eval)
-    # best_trials = trainer.hyperparameter_search(
-    #     n_trials=4, backend="optuna", hp_space=optuna_hp_space, direction="maximize"
-    # )
