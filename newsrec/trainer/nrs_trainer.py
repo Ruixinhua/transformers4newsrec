@@ -32,8 +32,8 @@ class NRSTrainer(Trainer):
             "split_batches": False, "dispatch_batches": False, "even_batches": True, "use_seedable_sampler": True
         }
         train_args_dict = {
-            "output_dir": f"{get_project_root()}/output_dir/{model_name}/",
-            "logging_dir": f"{get_project_root()}/output_dir/{model_name}/logs/",
+            "output_dir": f"{get_project_root()}/output_dir/{run_name}/",
+            "logging_dir": f"{get_project_root()}/output_dir/{run_name}/logs/",
             "run_name": run_name,
             "accelerator_config": accelerator_config,
             "log_level": "info",
@@ -73,10 +73,10 @@ if __name__ == "__main__":
     override_kwargs = {
         "model_name": "NRMSRSModel",  # NRMSRSModel/BaseNRS/LSTURRSModel/NAMLRSModel/NPARSModel/GLORYRSModel
         # "user_embed_method": "concat",  # init/concat
-        "text_feature": ["title"],  # ["title", "abstract", "body"]
+        "s": ["title"],  # ["title", "abstract", "body"]
         "early_stopping_patience": 3, "directed": False,
         # "cat_feature": ["category", "subvert"],  # ["category", "subvert"]
-        "subset_name": "small", "max_history_size": 50, "title_len": 30, "abstract_len": 0, "body_len": 70,
+        "subset_name": "small", "max_history_size": 50, "title_len": 30, "abstract_len": 0, "body_len": 0,
         # "entity_feature": ["entity"],  # ["entity", "abstract"]
         "use_cached_feature_mapper": True, "fast_evaluation": False, "use_cached_news_graph": True,
         "per_device_eval_batch_size": 128, "news_batch_size": 1024, "user_batch_size": 256, "use_flash_att": False,

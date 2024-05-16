@@ -26,19 +26,13 @@ class WordEmbedding(nn.Module):
             from transformers import AutoConfig, AutoModel
             self.output_hidden_states = kwargs.get("output_hidden_states", True)
             self.return_attention = kwargs.get("output_attentions", True)
-            self.n_layers = kwargs.get("n_layers", 1)
-            self.num_classes = kwargs.get("num_classes", 15)
-            self.embed_config = AutoConfig.from_pretrained(self.embedding_type, num_labels=self.num_classes,
+            self.num_hidden_layers = kwargs.get("plm_num_hidden_layers", 1)
+            embedding_model = kwargs.get("embedding_model", "bert-base-uncased")
+            self.embed_config = AutoConfig.from_pretrained(embedding_model,
                                                            output_hidden_states=self.output_hidden_states,
-                                                           output_attentions=self.return_attention)
-            add_weight = kwargs.get("add_weight", False)
-            try:
-                self.embed_config.__dict__.update({"add_weight": add_weight, "n_layers": self.n_layers})
-            except AttributeError:
-                self.embed_config.__dict__.update({"add_weight": add_weight, "num_hidden_layers": self.n_layers})
-            if self.embedding_type == "allenai/longformer-base-4096":
-                self.embed_config.attention_window = self.embed_config.attention_window[:self.n_layers]
-            embedding = AutoModel.from_pretrained(self.embedding_type, config=self.embed_config)
+                                                           output_attentions=self.return_attention,
+                                                           num_hidden_layers=self.num_hidden_layers)
+            embedding = AutoModel.from_pretrained(embedding_model, config=self.embed_config)
             self.embedding = kwargs.get("bert")(self.embed_config) if "bert" in kwargs else embedding
             if hasattr(self.embed_config, "dim"):  # for roberta like language model
                 self.embed_dim = self.embed_config.dim
@@ -68,10 +62,9 @@ class WordEmbedding(nn.Module):
 class FeatureEmbedding(nn.Module):
     def __init__(self, **kwargs):
         super(FeatureEmbedding, self).__init__()
-        self.title_len = kwargs.get("title_len", 30)
-        self.abstract_len = kwargs.get("abstract_len", 30)
-        self.body_len = kwargs.get("body_len", 100)
-        self.embed_dim = self.title_len + self.abstract_len + self.body_len + 2
+        self.title_len = kwargs.get("title_len")
+        self.abstract_len = kwargs.get("abstract_len")
+        self.body_len = kwargs.get("body_len")
         feature_mapper = load_feature_mapper(**kwargs)
         self.entity_feature = kwargs.get("entity_feature")
         if self.entity_feature:

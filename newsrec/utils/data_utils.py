@@ -51,6 +51,39 @@ def load_embedding_from_glove_name(glove_name=None):
     return glove_embeds
 
 
+class TokenizerWrapper:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.pad_token_id = tokenizer.pad_token_id
+
+    def get_vocab(self):
+        return self.tokenizer.get_vocab()
+
+    def __call__(self, text, **encode_kwargs):
+        """
+        Encode text to token ids
+        :param text: str or list
+        :param encode_kwargs: max_length
+        :return: token ids
+        """
+        tokens = []
+        max_length = encode_kwargs.get("max_length", 30)
+        padding = encode_kwargs.get("padding", "max_length")
+        if isinstance(text, str):
+            tokens = self.tokenizer.encode(text).ids
+            if padding == "max_length":
+                tokens = tokens[:max_length] + [self.pad_token_id] * (max_length - len(tokens))
+        elif isinstance(text, list):
+            for t in text:
+                token = self.tokenizer.encode(t).ids
+                if padding == "max_length":
+                    token = token[:max_length] + [self.pad_token_id] * (max_length - len(token))
+                tokens.append(token)
+        else:
+            raise ValueError(f"Unsupported text type: {type(text)}")
+        return {"input_ids": tokens}
+
+
 def load_tokenizer(**kwargs):
     """
     load tokenizer based on the embedding type: glove, plm
@@ -88,10 +121,8 @@ def load_tokenizer(**kwargs):
             default_tokenizer_path.parent.mkdir(parents=True, exist_ok=True)
             tokenizer.save(default_tokenizer_path.as_posix())
         # redefine encode function to return ids only
-        encode_func = tokenizer.encode
-        tokenizer.encode = lambda x: encode_func(x).ids
         tokenizer.pad_token_id = tokenizer.get_vocab()["[UNK]"]
-        return tokenizer
+        return TokenizerWrapper(tokenizer)
     elif embedding_type == "plm":
         from transformers import AutoTokenizer
         embedding_model = kwargs.get("embedding_model", "bert-base-uncased")
@@ -178,18 +209,18 @@ def load_entity_dict(subset_name: str, entity_feature: Union[str, list] = "entit
 class FeatureMapper:
 
     def get_entity_matrix(self):
-        start = self.title_length + self.abstract_length + self.body_length + 2
+        start = self.title_length + self.abstract_len + self.body_length + 2
         return self.feature_matrix[..., start:]
 
     def __init__(self, **kwargs):
         self.subset_name = kwargs.get("subset_name", "small")
-        self.title_length = kwargs.get("title_len", 30)
-        self.abstract_length = kwargs.get("abstract_len", 30)
-        self.body_length = kwargs.get("body_len", 100)
+        self.title_length = kwargs.get("title_len")
+        self.abstract_len = kwargs.get("abstract_len")
+        self.body_length = kwargs.get("body_len")
         self.tokenizer = load_tokenizer(**kwargs)
         self.entity_feature = kwargs.get("entity_feature")  # entity: title entity; ab_entity: plus abstract
         # feature include: title, abstract, body, category(1), subcategory(1)
-        self.feature_dim = self.title_length + self.abstract_length + self.body_length + 2
+        self.feature_dim = self.title_length + self.abstract_len + self.body_length + 2
         if self.entity_feature is not None:
             self.entity_length = kwargs.get("entity_len", 5)
             self.entity_feature = [self.entity_feature] if isinstance(self.entity_feature, str) else self.entity_feature
@@ -201,17 +232,29 @@ class FeatureMapper:
         self.category_mapper = {c: i + 1 for i, c in enumerate(set(category))}
         self.subvert_mapper = {s: i + 1 for i, s in enumerate(set(subvert))}
         title, abstract, body = list(news_data["title"]), list(news_data["abstract"]), list(news_data["body"])
+        if self.title_length:
+            titles = self.tokenizer(title, max_length=self.title_length, truncation=True, padding="max_length")
+            titles = titles["input_ids"]
+        else:
+            raise ValueError("Title length must be provided")
+        if self.abstract_len:
+            abstracts = self.tokenizer(abstract, max_length=self.abstract_len, truncation=True, padding="max_length")
+            abstracts = abstracts["input_ids"]
+        else:
+            abstracts = []
+        if self.body_length:
+            articles = self.tokenizer(body, max_length=self.body_length, truncation=True, padding="max_length")
+            articles = articles["input_ids"]
+        else:
+            articles = []
         entity_lists = {"entity": list(news_data["entity"]), "ab_entity": list(news_data["ab_entity"])}
         for index in range(len(news_data)):
-            title_tokens = self.tokenizer.encode(title[index])[:self.title_length]
-            title_tokens += [0] * (self.title_length - len(title_tokens))
-            abstract_tokens = self.tokenizer.encode(abstract[index])[:self.abstract_length]
-            abstract_tokens += [0] * (self.abstract_length - len(abstract_tokens))
-            body_tokens = self.tokenizer.encode(body[index])[:self.body_length]
-            body_tokens += [0] * (self.body_length - len(body_tokens))
-            category_id = self.category_mapper[category[index]]
-            subvert_id = self.subvert_mapper[subvert[index]]
-            data = [title_tokens, abstract_tokens, body_tokens, [category_id, subvert_id]]
+            data = [titles[index]]
+            if self.abstract_len:
+                data.append(abstracts[index])
+            if self.body_length:
+                data.append(articles[index])
+            data.append([self.category_mapper[category[index]], self.subvert_mapper[subvert[index]]])
             if self.entity_feature is not None:
                 for e_f in self.entity_feature:
                     entity_line = entity_lists[e_f][index]
@@ -232,11 +275,13 @@ def load_feature_mapper(**kwargs):
     :return: FeatureMapper object
     """
     use_cached_feature_mapper = kwargs.get("use_cached_feature_mapper", True)
-    title_len, subset_name = kwargs.get("title_len", 30), kwargs.get('subset_name', 'small')
-    abstract_len, body_len = kwargs.get("abstract_len", 30), kwargs.get("body_len", 100)
+    title_len, subset_name = kwargs.get("title_len"), kwargs.get('subset_name', 'small')
+    abstract_len, body_len = kwargs.get("abstract_len"), kwargs.get("body_len")
     embed_dim = title_len + abstract_len + body_len + 2
-    if kwargs.get("entity_len"):
+    if kwargs.get("entity_feature"):
         entity_feature = kwargs.get("entity_feature")
+        if kwargs.get("entity_len") is None:
+            raise ValueError("entity_len must be provided when entity_feature is not None")
         entity_feature = [entity_feature] if isinstance(entity_feature, str) else entity_feature
         embed_dim += (kwargs.get("entity_len") * len(entity_feature))
     tokenizer_name = kwargs.get("embedding_type", "glove")

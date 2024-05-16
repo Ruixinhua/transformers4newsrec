@@ -187,11 +187,9 @@ class BaseNRS(BaseModel):
         else:
             news_feature = self.news_encoder(input_feat)  # shape = (B*(H+C), E)
             news_vector = news_feature["news_vector"]
-            # news_vector = reshape_tensor(news_vector, (uid.size(0), -1, news_vector.size(-1)))
-            # input_feat["history_news"] = news_vector[:, :history_nid.size(1), :]
             # fetch history news vector from all news vectors
             input_feat["history_news"] = self.get_mapping_vector(news_vector, input_feat["history_mapping"])
-            input_feat.update({"news_vector": news_vector, "entity_vector": news_feature.get("entity_vector")})
+            input_feat.update(news_feature)
             # run user encoder
             output_dict = self.user_encoder(input_feat)
             user_vector = output_dict["user_vector"]
