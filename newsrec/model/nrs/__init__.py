@@ -5,3 +5,4 @@ from .naml import *
 from .npa import *
 # from .dkn import *
 from .glory import *
+from .batm import *

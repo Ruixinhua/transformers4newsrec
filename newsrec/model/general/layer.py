@@ -161,6 +161,70 @@ class MultiHeadedAttention(nn.Module):
         return self.final(x), self.attn
 
 
+class BiAttentionLayer(nn.Module):
+    def __init__(self, **model_args):
+        super(BiAttentionLayer, self).__init__()
+        self.topic_layer_name = model_args.get("topic_layer_name", "base_att")
+        self.topic_num, self.topic_dim = model_args.get("topic_num", 50), model_args.get("topic_dim", 20)
+        # self.topic_dim = model_args.get("topic_dim", self.topic_num * self.topic_dim)
+        self.embedding_dim = model_args.get("embedding_dim", 300)
+        self.hidden_dim = model_args.get("hidden_dim", 256)
+        self.add_topic_evaluation = model_args.get("add_topic_evaluation", False)
+        self.act_layer = activation_layer(model_args.get("act_layer", "tanh"))  # default use tanh
+        self.final = nn.Linear(self.embedding_dim, self.embedding_dim)
+        if self.topic_layer_name == "base_att":
+            self.topic_layer = nn.Sequential(
+                nn.Linear(self.embedding_dim, self.topic_num * self.topic_dim), self.act_layer,
+                nn.Linear(self.topic_num * self.topic_dim, self.topic_num)
+            )
+        elif self.topic_layer_name == "base_advanced":
+            self.topic_layer = nn.Sequential(
+                # map to hidden dim
+                nn.Linear(self.embedding_dim, self.topic_num * self.hidden_dim), self.act_layer,
+                # map to topic dim
+                nn.Linear(self.topic_num * self.hidden_dim, self.topic_num * self.topic_dim), self.act_layer,
+                # map to topic num
+                nn.Linear(self.topic_num * self.topic_dim, self.topic_num), activation_layer("sigmoid")
+            )
+        elif self.topic_layer_name == "base_topic_vector":
+            self.topic_layer = nn.Linear(self.embedding_dim, self.topic_num, bias=False)
+        elif self.topic_layer_name == "variational_topic":
+            self.topic_layer = nn.Sequential(
+                nn.Linear(self.embedding_dim, self.topic_num * self.hidden_dim, bias=True), self.act_layer,
+                nn.Linear(self.topic_num * self.hidden_dim, self.topic_num, bias=True)
+            )
+            self.logsigma_q_theta = nn.Sequential(
+                nn.Linear(self.embedding_dim, self.topic_num * self.hidden_dim, bias=True), self.act_layer,
+                nn.Linear(self.topic_num * self.hidden_dim, self.topic_num, bias=True)
+            )
+        else:
+            raise ValueError("Specify correct variant name!")
+
+    def forward(self, news_embeddings, news_mask):
+        """
+        Topic forward pass, return topic vector and topic weights
+        """
+        out_dict = {}
+        if self.topic_layer_name == "variational_topic":
+            scores = self.topic_layer(news_embeddings)
+            log_q_theta = self.logsigma_q_theta(news_embeddings)
+            out_dict["kl_divergence"] = -0.5 * torch.sum(1+log_q_theta-scores.pow(2)-log_q_theta.exp(), dim=-1).mean()
+            if self.training:  # reparameterization topic weight in training
+                std = torch.exp(0.5 * log_q_theta)
+                eps = torch.randn_like(std)
+                scores = eps.mul_(std).add_(scores)
+            scores = scores.transpose(1, 2)
+        elif self.topic_layer_name == "base_topic_vector":
+            scores = (news_embeddings @ self.topic_layer.weight.transpose(0, 1)).transpose(1, 2)  # (N, H, S)
+        else:
+            scores = self.topic_layer(news_embeddings).transpose(1, 2)  # (N, H, S)
+        weights = torch.exp(scores) * news_mask.unsqueeze(dim=1)
+        topic_weight = weights / (torch.sum(weights, dim=-1, keepdim=True) + 1e-8)
+        topic_vector = self.final(torch.matmul(topic_weight, news_embeddings))  # (N, H, E)
+        out_dict.update({"topic_vector": topic_vector, "topic_weight": topic_weight})
+        return out_dict
+
+
 class MultiFeatureAttentionFusion(nn.Module):
     def __init__(self, feature_dims, fusion_dim):
         super(MultiFeatureAttentionFusion, self).__init__()
@@ -229,3 +293,26 @@ class Conv1D(nn.Module):
                                          self.conv3(feature),
                                          self.conv4(torch.cat([feature, padding_zeros], dim=1)),
                                          self.conv5(feature)], dim=1))
+
+
+def activation_layer(act_name):
+    """
+    Construct activation layers
+    :param act_name: str or nn.Module, name of activation function
+    :return: act_layer: activation layer
+    """
+    act_layer = None
+    if isinstance(act_name, str):
+        if act_name.lower() == "sigmoid":
+            act_layer = nn.Sigmoid()
+        elif act_name.lower() == "relu":
+            act_layer = nn.ReLU(inplace=True)
+        elif act_name.lower() == "prelu":
+            act_layer = nn.PReLU()
+        elif act_name.lower() == "tanh":
+            act_layer = nn.Tanh()
+    elif issubclass(act_name, nn.Module):
+        act_layer = act_name()
+    else:
+        raise NotImplementedError(f"Activation layer {act_name} is not implemented")
+    return act_layer

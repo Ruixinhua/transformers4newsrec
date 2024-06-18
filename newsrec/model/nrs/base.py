@@ -23,15 +23,15 @@ class BaseNRS(BaseModel):
         self.word_embedding = WordEmbedding(**kwargs)
         self.feature_embedding = FeatureEmbedding(**kwargs)
         if not hasattr(self, "embedding_dim"):
+            # embedding_dim is the dimension of the final news embedding and user embedding for recommendation
             self.embedding_dim = self.word_embedding.embed_dim
         self.news_batch_size = kwargs.get("news_batch_size", 1024)
         self.user_batch_size = kwargs.get("user_batch_size", 128)
         self.user_history = UserHistoryEmbedding(**kwargs)
-        self.news_embedding = FrozenEmbedding(len(self.feature_embedding), self.embedding_dim)  # news_num, embed_dim
+        self.nid_embedding = FrozenEmbedding(len(self.feature_embedding), self.embedding_dim)  # news_num, embed_dim
         self.uid_embedding = FrozenEmbedding(len(self.user_history), self.embedding_dim)  # user_num, embed_dim
         self.load_embedding = False  # set to false when training and at the beginning of the evaluation
-        self.fast_evaluation = kwargs.get("fast_evaluation", True)
-        self.click_predictor = ClickPredictor(**kwargs)
+        self.fast_evaluation = kwargs.get("fast_evaluation", False)
         self.criterion = getattr(module_loss, kwargs.get("loss", "categorical_loss"))
         self.pad_token_id = int(load_tokenizer(**kwargs).pad_token_id)
         # news feature can be used: title, abstract, body, category, subvert
@@ -61,6 +61,7 @@ class BaseNRS(BaseModel):
         if self.use_layernorm:
             # self.multi_layer_norm = nn.LayerNorm(self.embedding_dim)
             self.att_layer_norm = nn.LayerNorm(self.embedding_dim)
+        self.click_predictor = ClickPredictor(**kwargs)
         # self.uid_feature = kwargs.get("uid_feature")
         self.attention_hidden_dim = kwargs.get("attention_hidden_dim", 200)
         self.dropout_we = nn.Dropout(kwargs.get("dropout_we", 0.2))  # dropout for word embedding
@@ -160,29 +161,28 @@ class BaseNRS(BaseModel):
         input_feat = {"uid": uid, "history_nid": history_nid, "candidate_nid": candidate_nid,
                       "history_mask": history_mask, "candidate_mask": candidate_mask}
         input_feat = self.build_input_feat(input_feat)
-        # input_feat["nid"] = torch.cat((history_nid, candidate_nid), dim=1)
         if not self.training and not self.load_embedding and self.fast_evaluation:
             """run model to generate embedding caches for evaluation"""
             self.load_embedding = True
             torch.cuda.empty_cache()  # empty training cache
-            news_indices = torch.tensor(range(len(self.news_embedding))).to(uid.device)
+            news_indices = torch.tensor(range(len(self.nid_embedding))).to(uid.device)
             news_loader = DataLoader(news_indices, batch_size=self.news_batch_size, shuffle=False)
-            news_embeddings = torch.zeros(len(self.news_embedding), self.embedding_dim).to(uid.device)
+            news_embeddings = torch.zeros(len(self.nid_embedding), self.embedding_dim).to(uid.device)
             for nid in news_loader:
                 news_embeddings[nid] = self.news_encoder({"nid": nid})["news_vector"]
-            self.news_embedding.embedding = nn.Embedding.from_pretrained(news_embeddings, freeze=True).to(uid.device)
+            self.nid_embedding.embedding = nn.Embedding.from_pretrained(news_embeddings, freeze=True).to(uid.device)
             user_indices = torch.tensor(range(len(self.uid_embedding))).to(uid.device)
             user_loader = DataLoader(user_indices, batch_size=self.user_batch_size, shuffle=False)
             user_embedding = torch.zeros(len(self.uid_embedding), self.embedding_dim).to(uid.device)
             for u in user_loader:
                 h_nid = self.user_history(u)
-                history_news = self.news_embedding(h_nid)
+                history_news = self.nid_embedding(h_nid)
                 user_input = {"uid": u, "history_mask": h_nid != 0, "history_news": history_news}
                 user_embedding[u] = self.user_encoder(user_input)["user_vector"]
             self.uid_embedding.embedding = nn.Embedding.from_pretrained(user_embedding, freeze=True).to(uid.device)
             torch.cuda.empty_cache()  # empty cuda cache
         if self.load_embedding:
-            candidate_news_vector = self.news_embedding(candidate_nid)
+            candidate_news_vector = self.nid_embedding(candidate_nid)
             user_vector = self.uid_embedding(uid)
         else:
             news_feature = self.news_encoder(input_feat)  # shape = (B*(H+C), E)

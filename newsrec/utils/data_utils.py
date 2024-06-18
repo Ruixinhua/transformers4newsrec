@@ -146,7 +146,7 @@ def load_glove_embedding_matrix(**kwargs):
         return np.load(glove_embedding_path.as_posix())
     glove_embeds = load_embedding_from_glove_name(glove_name=glove_name)
     glove_embeds.set_index("token", inplace=True)
-    glove_tokenizer = load_tokenizer(embedding_type="glove", subset_name="small")
+    glove_tokenizer = load_tokenizer(embedding_type="glove", subset_name=subset_name)
     glove_vocab = glove_tokenizer.get_vocab()
     vocab_in = set(glove_embeds.index.values) & set(glove_vocab)
     vocab_out = set(glove_vocab) - set(vocab_in)

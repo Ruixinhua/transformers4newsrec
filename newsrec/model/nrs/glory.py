@@ -136,8 +136,7 @@ class GLORYRSModel(BaseNRS):
         word_vector = self.dropout_we(self.word_embedding(news_tokens, news_mask))  # shape = (B*(H+C), F, E)
         output_dict = {"word_vector": word_vector, "news_mask": news_mask}
         if self.use_local_entity or self.use_local_entity_only:
-            entity = news_feature_dict["entity"]
-            output_dict.update({"entity_vector": self.entity_embedding(entity)})
+            output_dict.update({"entity_vector": self.entity_embedding(news_feature_dict["entity"])})
         if self.use_entity_graph or self.use_entity_graph_only:
             entity = torch.masked_select(news_feature_dict["entity"], news_feature_dict["entity"] != 0)
             entity_neighbors_all = copy.deepcopy(entity)
@@ -154,7 +153,7 @@ class GLORYRSModel(BaseNRS):
             )
             sub_graph_entity = Data(x=entity_neighbors_all, edge_index=sub_edge_index, edge_attr=sub_edge_attr)
             output_dict.update({
-                "entity_vector": self.entity_embedding(entity_neighbors_all),
+                "entity_vector_neighbors": self.entity_embedding(entity_neighbors_all),
                 "entity_mapping": entity_mapping,
                 "sub_graph_entity": sub_graph_entity
             })
@@ -183,7 +182,7 @@ class GLORYRSModel(BaseNRS):
                 "entity_vector": self.local_entity_encoder(text_features.get("entity_vector"), None)
             })
         if self.use_entity_graph or self.use_entity_graph_only:
-            entity_vector, entity_mapping = text_features["entity_vector"], text_features["entity_mapping"]
+            entity_vector, entity_mapping = text_features["entity_vector_neighbors"], text_features["entity_mapping"]
             graph_vector = self.global_entity_encoder(entity_vector, text_features["sub_graph_entity"].edge_index)
             graph_vector_batch = self.get_mapping_vector(graph_vector, entity_mapping)
             news_features["entity_graph_vector"] = self.global_entity_att(graph_vector_batch, None)[0]
@@ -234,7 +233,7 @@ class GLORYRSModel(BaseNRS):
             user_feature = torch.stack(user_vectors, dim=2).view(-1, len(user_vectors), self.embedding_dim)
             user_feature = self.fused_attention(user_feature)[0].view(batch_size, -1, self.embedding_dim)
             # shape = (B, F, H, D)
-            if self.use_candidate_local_entity or self.use_candidate_entity_graph:
+            if self.use_candidate_local_entity or self.use_candidate_entity_graph or self.use_candidate_news_graph:
                 candidate_vectors = torch.stack(candidate_vectors, dim=1)  # shape = (B*C, F, D)
                 candidate_vectors = self.fused_attention(candidate_vectors)[0]  # shape = (B*C, D)
                 candidate_news_vector = candidate_vectors.view(batch_size, -1, self.embedding_dim)  # shape = (B, C, D)
