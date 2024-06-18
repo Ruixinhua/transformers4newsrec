@@ -4,7 +4,7 @@
 # @Function      : NRMS model for news recommendation system
 import torch.nn as nn
 
-from newsrec.model.general import MultiHeadedAttention
+from newsrec.model.general import MultiHeadAttention
 from .base import BaseNRS
 
 
@@ -18,14 +18,11 @@ class NRMSRSModel(BaseNRS):
         # define document embedding dim before inherit super class
         self.head_num, self.head_dim = kwargs.get("head_num", 20), kwargs.get("head_dim", 20)
         self.embedding_dim = kwargs.get("embedding_dim", self.head_num * self.head_dim)
-        self.use_flash_att = kwargs.get("use_flash_att", False)
         super().__init__(**kwargs)
-        self.news_encode_layer = MultiHeadedAttention(self.head_num, self.head_dim, self.word_embedding.embed_dim,
-                                                      use_flash_att=self.use_flash_att)
+        self.news_encode_layer = MultiHeadAttention(self.head_num, self.head_dim, self.word_embedding.embed_dim)
         self.user_layer_name = kwargs.get("user_layer_name", "mha")
         if self.user_layer_name == "mha":
-            self.user_encode_layer = MultiHeadedAttention(self.head_num, self.head_dim, self.embedding_dim,
-                                                          use_flash_att=self.use_flash_att)
+            self.user_encode_layer = MultiHeadAttention(self.head_num, self.head_dim, self.embedding_dim)
         elif self.user_layer_name == "gru":
             self.user_encode_layer = nn.GRU(self.embedding_dim, self.embedding_dim, batch_first=True)
         else:
