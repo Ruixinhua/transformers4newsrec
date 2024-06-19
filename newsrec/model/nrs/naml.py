@@ -39,8 +39,8 @@ class NAMLRSModel(BaseNRS):
         news_feature_dict = self.feature_embedding.select_feature(news_all_feature)
         news_vector = []
         for feature in self.text_feature:
-            feature_tokens = torch.tensor(news_feature_dict[feature]).to(input_feat["nid"].device)
-            feature_mask = torch.where(feature_tokens == self.pad_token_id, 0, 1).to(input_feat["nid"].device)
+            feature_tokens = news_feature_dict[feature]
+            feature_mask = torch.where(feature_tokens == self.pad_token_id, 0, 1)
             # feature_tokens: shape = (B, H+C, F), F is the sum of feature used in news
             if len(feature_tokens.shape) == 3:
                 feature_tokens = reshape_tensor(feature_tokens)  # out: (B * (H+C), F)

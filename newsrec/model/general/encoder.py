@@ -1,12 +1,12 @@
 import torch.nn as nn
 
-from .layer import MultiHeadedAttention, AttLayer, BiAttentionLayer
+from .layer import MultiHeadAttentionAdv, AttLayer, BiAttentionLayer
 
 
 class NRMSEncoder(nn.Module):
     def __init__(self, head_num, head_dim, embedding_dim, attention_hidden_dim, dropout_rate=0, use_flash_att=False):
         super(NRMSEncoder, self).__init__()
-        self.mha_layer = MultiHeadedAttention(head_num, head_dim, embedding_dim, use_flash_att=use_flash_att)
+        self.mha_layer = MultiHeadAttentionAdv(head_num, head_dim, embedding_dim, use_flash_att=use_flash_att)
         # output tensor shape = (B, F, D)
         self.att_layer = AttLayer(head_num * head_dim, attention_hidden_dim)
         self.dropout = nn.Dropout(dropout_rate)

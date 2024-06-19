@@ -93,7 +93,7 @@ class PersonalizedAttentivePooling(nn.Module):
         return y, vec_att2
 
 
-class MultiHeadedAttention(nn.Module):
+class MultiHeadAttentionAdv(nn.Module):
     """
     MultiheadedAttention:
 
@@ -102,7 +102,7 @@ class MultiHeadedAttention(nn.Module):
 
     def __init__(self, h, d_k, input_dim, dropout=0, use_flash_att=True):
         "Take in model size and number of heads."
-        super(MultiHeadedAttention, self).__init__()
+        super(MultiHeadAttentionAdv, self).__init__()
         # We assume d_v always equals d_k
         self.d_k = d_k
         self.h = h

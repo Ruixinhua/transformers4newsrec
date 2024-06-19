@@ -7,7 +7,7 @@ import copy
 import torch
 import torch.nn as nn
 from newsrec.data import load_news_graph, load_entity_graph
-from newsrec.model.general import MultiHeadedAttention, AttLayer
+from newsrec.model.general import MultiHeadAttentionAdv, AttLayer
 from torch_geometric.nn import Sequential, GatedGraphConv
 from torch_geometric.data import Data
 from torch_geometric.utils import subgraph
@@ -38,12 +38,12 @@ class GLORYRSModel(BaseNRS):
                 f"Only one of the following flags can be set to True: "
                 f"use_local_entity_only: {self.use_local_entity_only}; use_news_graph_only: {self.use_news_graph_only};"
                 f"use_local_news_only: {self.use_local_news_only}; use_entity_graph_only: {self.use_entity_graph_only}")
-        self.news_encode_layer = MultiHeadedAttention(self.head_num, self.head_dim, word_embed_dim,
-                                                      use_flash_att=self.use_flash_att)
+        self.news_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, word_embed_dim,
+                                                       use_flash_att=self.use_flash_att)
         self.user_layer_name = kwargs.get("user_layer_name", "mha")
         if self.user_layer_name == "mha":
-            self.user_encode_layer = MultiHeadedAttention(self.head_num, self.head_dim, self.embedding_dim,
-                                                          use_flash_att=self.use_flash_att)
+            self.user_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, self.embedding_dim,
+                                                           use_flash_att=self.use_flash_att)
         if self.use_news_graph or self.use_news_graph_only:
             self.news_graph = load_news_graph(**kwargs)
             news_neighbors_num = kwargs.get("news_neighbors_num", 8)
@@ -60,8 +60,8 @@ class GLORYRSModel(BaseNRS):
         if self.use_local_entity or self.use_local_entity_only:
             self.local_entity_encoder = Sequential("x, mask", [
                 (nn.Dropout(p=kwargs.get("dropout_le", 0.2)), "x -> x"),
-                (MultiHeadedAttention(int(self.entity_dim / self.head_dim), self.head_dim, self.entity_dim,
-                                      use_flash_att=self.use_flash_att),
+                (MultiHeadAttentionAdv(int(self.entity_dim / self.head_dim), self.head_dim, self.entity_dim,
+                                       use_flash_att=self.use_flash_att),
                  "x,x,x,mask -> x,x_att"),
                 (nn.Dropout(p=kwargs.get("dropout_le", 0.2)), "x -> x"),
                 (AttLayer(self.entity_dim, self.attention_hidden_dim), "x,mask -> x,x_att"),
@@ -83,8 +83,8 @@ class GLORYRSModel(BaseNRS):
             ])
             self.global_entity_att = Sequential('x, mask', [
                 (nn.Dropout(p=kwargs.get("dropout_eg", 0.2)), 'x -> x'),
-                (MultiHeadedAttention(self.head_num, self.head_dim, self.entity_dim,
-                                      use_flash_att=self.use_flash_att), 'x,x,x,mask -> x,x_att'),
+                (MultiHeadAttentionAdv(self.head_num, self.head_dim, self.entity_dim,
+                                       use_flash_att=self.use_flash_att), 'x,x,x,mask -> x,x_att'),
                 (AttLayer(self.head_num * self.head_dim, self.attention_hidden_dim), "x,mask -> x,x_att"),
             ])
 

@@ -25,21 +25,21 @@ class BaseNRS(BaseModel):
         if not hasattr(self, "embedding_dim"):
             # embedding_dim is the dimension of the final news embedding and user embedding for recommendation
             self.embedding_dim = self.word_embedding.embed_dim
-        self.news_batch_size = kwargs.get("news_batch_size", 1024)
-        self.user_batch_size = kwargs.get("user_batch_size", 128)
+        self.news_batch_size = kwargs.get("news_batch_size")  # batch size for news embedding
+        self.user_batch_size = kwargs.get("user_batch_size")  # batch size for user embedding
         self.user_history = UserHistoryEmbedding(**kwargs)
         self.nid_embedding = FrozenEmbedding(len(self.feature_embedding), self.embedding_dim)  # news_num, embed_dim
         self.uid_embedding = FrozenEmbedding(len(self.user_history), self.embedding_dim)  # user_num, embed_dim
         self.load_embedding = False  # set to false when training and at the beginning of the evaluation
-        self.fast_evaluation = kwargs.get("fast_evaluation", False)
-        self.criterion = getattr(module_loss, kwargs.get("loss", "categorical_loss"))
+        self.fast_evaluation = kwargs.get("fast_evaluation")
+        self.criterion = getattr(module_loss, kwargs.get("loss"))
         self.pad_token_id = int(load_tokenizer(**kwargs).pad_token_id)
         # news feature can be used: title, abstract, body, category, subvert
-        self.text_feature = kwargs.get("text_feature", ["title"])
-        self.cat_feature = kwargs.get("cat_feature", [])
+        self.text_feature = kwargs.get("text_feature")
+        self.cat_feature = kwargs.get("cat_feature")
         self.entity_feature = kwargs.get("entity_feature")
         self.use_layernorm = kwargs.get("use_layernorm", False)  # whether to use layernorm in attention layer
-        self.use_flash_att = kwargs.get("use_flash_att", False)
+        self.use_flash_att = kwargs.get("use_flash_att", False)  # whether to use flash attention
         self.use_news_mask = kwargs.get("use_news_mask", False)  # whether to use news mask
         self.use_user_mask = kwargs.get("use_user_mask", False)  # whether to use user mask
         if isinstance(self.entity_feature, str):

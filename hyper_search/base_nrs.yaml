@@ -1,0 +1,46 @@
+learning_rate:
+    name: "learning_rate"
+    low: 0.00001
+    high: 0.001
+    log: True
+
+text_feature:
+    name: "text_feature"
+    choices:
+        - "[title]"
+        - "[title,body]"
+
+topic_num_0:
+    name: "topic_num"
+    choices:
+        - 10
+        - 70
+        - 120
+
+topic_num_1:
+    name: "topic_num"
+    choices:
+        - 20
+        - 60
+        - 110
+
+topic_num_2:
+    name: "topic_num"
+    choices:
+        - 40
+        - 50
+        - 100
+
+topic_num_3:
+    name: "topic_num"
+    choices:
+        - 30
+        - 80
+        - 90
+
+topic_dim:
+    name: "topic_dim"
+    choices:
+        - 10
+        - 20
+        - 30
