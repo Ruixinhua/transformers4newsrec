@@ -38,7 +38,7 @@ def write_json(content: Dict, file: Union[str, os.PathLike]):
         json.dump(content, handle, indent=4, sort_keys=False)
 
 
-def get_project_root(project_name="Transformers4NewsRec", **kwargs):
+def get_project_root(project_name="transformers4newsrec", **kwargs):
     """
     Get the project root path
     :param project_name: Transformers4NewsRec
@@ -47,9 +47,9 @@ def get_project_root(project_name="Transformers4NewsRec", **kwargs):
     project_root = kwargs.get("project_root")
     if project_root and Path(project_root).exists():
         return project_root
-    file_parts = Path(os.getcwd()).parts
+    file_parts = [p.lower() for p in Path(os.getcwd()).parts]
     try:
-        index = file_parts.index(project_name)
+        index = file_parts.index(project_name.lower())
     except ValueError:
         return os.getcwd()
     abs_path = Path(f"{os.sep}".join(file_parts[: index + 1]))

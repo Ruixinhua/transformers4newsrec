@@ -1,8 +1,9 @@
 learning_rate:
     name: "learning_rate"
-    low: 0.00001
+    low: 0.0001
     high: 0.001
-    log: True
+    log: False
+    step: 0.0001
 
 text_feature:
     name: "text_feature"
@@ -40,7 +41,7 @@ topic_num_3:
 
 topic_dim:
     name: "topic_dim"
-    choices:
-        - 10
-        - 20
-        - 30
+    low: 10
+    high: 30
+    log: False
+    step: 10
