@@ -6,12 +6,11 @@ TRAINING_ARGS = {
     "save_strategy": "epoch",  # epoch/steps, default saved by epoch
     "save_steps": 1000,  # if save_strategy is steps, save every save_steps
     "save_total_limit": 1,  # limit the total amount of checkpoints, delete the older checkpoints
-    "evaluation_strategy": "steps",  # epoch/steps, default saved by epoch
+    "evaluation_strategy": "epoch",  # epoch/steps, default saved by epoch
     "eval_steps": 10,  # if evaluation_strategy is steps, evaluate every eval_steps
-    "load_best_model_at_end": False,  # evaluation_strategy should be epoch for `True` setting
+    "load_best_model_at_end": True,  # evaluation_strategy should be ‘epoch’ for ‘True’
     "metric_for_best_model": "eval_monitor_metric",  # metric name for monitoring the best model
     "greater_is_better": True,  # whether the metric is better when greater
-    "skip_memory_metrics": True,  # report memory metrics will slow train and evaluation speed
     "disable_tqdm": False,  # disable tqdm progress bar
     "learning_rate": 0.0002,  # initial learning rate for AdamW optimizer, PLM usually use 1e-5
     "gradient_accumulation_steps": 1,  # number of updates steps to accumulate before performing a backward pass
@@ -22,6 +21,7 @@ TRAINING_ARGS = {
     "report_to": "all",  # "all": all installed integrations, default use wandb
     "group_by_length": False,  # Whether group together samples of roughly the same length for the training dataset
     "remove_unused_columns": False,  # Whether to automatically remove the columns unused by the model forward method.
+    "skip_memory_metrics": True,  # report memory metrics will slow train and evaluation speed
     "accelerator_config": {  # accelerator config for multi-device training
         "split_batches": False, "dispatch_batches": False, "even_batches": True, "use_seedable_sampler": True
     }
