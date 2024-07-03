@@ -56,8 +56,9 @@ class GLORYRSModel(BaseNRS):
             self.global_news_encoder = Sequential("x,index", [
                 (GatedGraphConv(self.embedding_dim, num_layers=3, aggr="add"), "x,index -> x"),
             ])
-
-        if self.use_local_entity or self.use_local_entity_only:
+        self.use_entity_feature = ((self.entity_feature and len(self.entity_feature)) and
+                                   (self.use_local_entity or self.use_local_entity_only))
+        if self.use_entity_feature:
             self.local_entity_encoder = Sequential("x, mask", [
                 (nn.Dropout(p=kwargs.get("dropout_le", 0.2)), "x -> x"),
                 (MultiHeadAttentionAdv(int(self.entity_dim / self.head_dim), self.head_dim, self.entity_dim,
@@ -135,7 +136,7 @@ class GLORYRSModel(BaseNRS):
         news_mask = torch.where(news_tokens == self.pad_token_id, 0, 1).to(news_tokens.device)  # shape = (B*(H+C), F)
         word_vector = self.dropout_we(self.word_embedding(news_tokens, news_mask))  # shape = (B*(H+C), F, E)
         output_dict = {"word_vector": word_vector, "news_mask": news_mask}
-        if self.use_local_entity or self.use_local_entity_only:
+        if self.use_entity_feature:
             output_dict.update({"entity_vector": self.entity_embedding(news_feature_dict["entity"])})
         if self.use_entity_graph or self.use_entity_graph_only:
             entity = torch.masked_select(news_feature_dict["entity"], news_feature_dict["entity"] != 0)
@@ -177,7 +178,7 @@ class GLORYRSModel(BaseNRS):
         # output = self.layer_norm(self.news_layer(y)[0])
         output = self.news_layer(y)[0]
         news_features = {"news_vector": output}
-        if self.use_local_entity or self.use_local_entity_only:
+        if self.use_entity_feature:
             news_features.update({
                 "entity_vector": self.local_entity_encoder(text_features.get("entity_vector"), None)
             })
@@ -199,7 +200,7 @@ class GLORYRSModel(BaseNRS):
             user_vectors = [local_history_news]
             if self.use_candidate_local_entity or self.use_candidate_entity_graph or self.use_candidate_news_graph:
                 candidate_vectors = [candidate_news_vector.reshape(-1, self.embedding_dim)]  # (B*C, D)
-        if self.use_local_entity or self.use_local_entity_only:
+        if self.use_entity_feature:
             user_entity = self.get_mapping_vector(input_feat["entity_vector"], input_feat["history_mapping"])
             cand_entity = self.get_mapping_vector(input_feat["entity_vector"], input_feat["candidate_mapping"])
             if self.use_fused_feature:

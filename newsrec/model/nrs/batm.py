@@ -52,7 +52,8 @@ class BATMRSModel(BaseNRS):
     def user_encoder(self, input_feat):
         history_news = input_feat["history_news"]
         if self.user_encoder_name == "gru":
-            history_length = input_feat["history_length"].cpu()
+            history_length = torch.sum(input_feat["history_mask"], dim=-1).cpu()
+            history_length[history_length == 0] = 1  # avoid zero history recording
             packed_y = pack_padded_sequence(history_news, history_length, batch_first=True, enforce_sorted=False)
             user_vector = self.user_encode_layer(packed_y)[1].squeeze(dim=0)
             user_weight = None

@@ -221,7 +221,7 @@ class FeatureMapper:
         self.entity_feature = kwargs.get("entity_feature")  # entity: title entity; ab_entity: plus abstract
         # feature include: title, abstract, body, category(1), subcategory(1)
         self.feature_dim = self.title_length + self.abstract_len + self.body_length + 2
-        if self.entity_feature is not None:
+        if self.entity_feature and len(self.entity_feature):
             self.entity_length = kwargs.get("entity_len", 5)
             self.entity_feature = [self.entity_feature] if isinstance(self.entity_feature, str) else self.entity_feature
             self.entity_dict = load_entity_dict(self.subset_name, self.entity_feature)
@@ -255,7 +255,7 @@ class FeatureMapper:
             if self.body_length:
                 data.append(articles[index])
             data.append([self.category_mapper[category[index]], self.subvert_mapper[subvert[index]]])
-            if self.entity_feature is not None:
+            if self.entity_feature and len(self.entity_feature):
                 for e_f in self.entity_feature:
                     entity_line = entity_lists[e_f][index]
                     if entity_line and len(entity_line):
@@ -299,6 +299,7 @@ def load_feature_mapper(**kwargs):
         feature_mapper = FeatureMapper(**kwargs)
         with open(feature_mapper_path, "wb") as f:
             pickle.dump(feature_mapper, f)
+        print(f"Feature mapper is saved to {feature_mapper_path}")
     return feature_mapper
 
 

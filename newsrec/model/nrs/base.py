@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from newsrec.model.base_model import BaseModel
 from newsrec.model.general import WordEmbedding, FeatureEmbedding, FrozenEmbedding, UserHistoryEmbedding
 from newsrec.model.general import ClickPredictor, AttLayer
-from newsrec.utils import reshape_tensor, load_tokenizer, load_entity_embedding_matrix
+from newsrec.utils import reshape_tensor, load_tokenizer, load_entity_embedding_matrix, empty_cache
 
 
 class BaseNRS(BaseModel):
@@ -52,7 +52,7 @@ class BaseNRS(BaseModel):
             if "subvert" in self.cat_feature:
                 sub_len = len(self.feature_embedding.subvert_mapper) + 1
                 self.subvert_embedding = nn.Embedding(sub_len, self.category_dim)
-        if self.entity_feature:
+        if self.entity_feature and len(self.entity_feature):
             entity_embed_matrix = load_entity_embedding_matrix(self.feature_embedding.entity_dict, **kwargs)
             self.entity_dim = entity_embed_matrix.shape[1]
             self.entity_embedding = nn.Embedding.from_pretrained(
@@ -156,6 +156,7 @@ class BaseNRS(BaseModel):
         :param candidate_mask: candidate news mask, shape = (B, C)
         :return: click possibility of candidate news, shape = (B, C)
         """
+        empty_cache()  # empty memory cache
         if self.training:  # keep load embedding to false when training
             self.load_embedding = False
         input_feat = {"uid": uid, "history_nid": history_nid, "candidate_nid": candidate_nid,

@@ -136,3 +136,12 @@ def reshape_tensor(input_tensor, output_shape=None):
     return input_tensor.contiguous().view(output_shape)
 
 
+def empty_cache():
+    """
+    Check the device first and empty memory cache of the device
+    """
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    # check if mps is available
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()

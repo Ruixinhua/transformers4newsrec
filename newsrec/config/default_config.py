@@ -6,9 +6,9 @@ TRAINING_ARGS = {
     "save_strategy": "epoch",  # epoch/steps, default saved by epoch
     "save_steps": 1000,  # if save_strategy is steps, save every save_steps
     "save_total_limit": 1,  # limit the total amount of checkpoints, delete the older checkpoints
-    "evaluation_strategy": "epoch",  # epoch/steps, default saved by epoch
-    "eval_steps": 1000,  # if evaluation_strategy is steps, evaluate every eval_steps
-    "load_best_model_at_end": True,  # load the best model found so far at the end of training
+    "evaluation_strategy": "steps",  # epoch/steps, default saved by epoch
+    "eval_steps": 10,  # if evaluation_strategy is steps, evaluate every eval_steps
+    "load_best_model_at_end": False,  # evaluation_strategy should be epoch for `True` setting
     "metric_for_best_model": "eval_monitor_metric",  # metric name for monitoring the best model
     "greater_is_better": True,  # whether the metric is better when greater
     "skip_memory_metrics": True,  # report memory metrics will slow train and evaluation speed

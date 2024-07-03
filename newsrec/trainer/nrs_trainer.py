@@ -2,7 +2,9 @@
 # @Author        : Rui
 # @Time          : 2024/4/8 17:02
 # @Function      : Basic Trainer class inherited from transformers.trainer
+import torch
 import copy
+import os
 
 from datetime import datetime
 from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
@@ -15,7 +17,6 @@ from newsrec.utils import collate_fn, init_model_class, get_project_root, comput
 class NRSTrainer(Trainer):
     def __init__(self, **kwargs):
         # add date and time to run_name
-        callbacks = [EarlyStoppingCallback(early_stopping_patience=kwargs.get("early_stopping_patience", 3))]
         train_dataset = UserInteractionDataset(split="train", **kwargs)
         eval_dataset = UserInteractionDataset(split="dev", **kwargs)
         model_name = kwargs.get("model_name", "NRMSRSModel")  # NRMSRSModel/BaseNRS
@@ -40,6 +41,9 @@ class NRSTrainer(Trainer):
         train_args_dict.update(kwargs.get("train_args", {}))
         train_args_dict["output_dir"] = kwargs.get("output_dir", f"{get_project_root()}/output_dir/{run_name}/")
         train_args_dict.update({k: v for k, v in kwargs.items() if hasattr(TrainingArguments, k)})
+        callbacks = []
+        if train_args_dict["evaluation_strategy"] == "epoch":
+            callbacks.append(EarlyStoppingCallback(early_stopping_patience=kwargs.get("early_stopping_patience", 3)))
         train_args = TrainingArguments(**train_args_dict)
         self.ignore_keys_for_eval = ["extra_output"]
         super(NRSTrainer, self).__init__(
@@ -67,21 +71,24 @@ if __name__ == "__main__":
 
         def optuna_hp_space(trial):
             search_space_all = OmegaConf.load(f"{get_project_root()}/hyper_search/base_nrs.yaml")
+            for path in os.listdir(f"{get_project_root()}/hyper_search"):
+                if path.endswith(".yaml") and path != "base_nrs.yaml":
+                    search_space_all.merge_with(OmegaConf.load(f"{get_project_root()}/hyper_search/{path}"))
             search_param_name = config.get("search_param_name", ["learning_rate"])
             params = {n: search_space_all[n] for n in search_param_name if n in search_space_all}
             search_space = {}
             for k, v in params.items():
                 try:
-                    search_space[k] = trial.suggest_categorical(**v)
+                    search_space[v["name"]] = trial.suggest_categorical(**v)
                 except TypeError:
-                    search_space[k] = trial.suggest_float(**v)
+                    search_space[v["name"]] = trial.suggest_float(**v)
             # for
             return search_space
         best_trials = trainer.hyperparameter_search(
             n_trials=config.get("n_trials"), backend="optuna", hp_space=optuna_hp_space, direction="maximize",
             hp_name=set_hp_name
         )
-        import torch
-        torch.save(best_trials, f"{trainer.args.output_dir}/best_trials.pth")
+        os.makedirs(f"{trainer.args.output_dir}/hyper_search", exist_ok=True)
+        torch.save(best_trials, f"{trainer.args.output_dir}/hyper_search/{config.get('run_name')}.pt")
     else:
         raise ValueError(f"Invalid running mode: {running_mode}, should be in ['train_only', 'hyper_search']")

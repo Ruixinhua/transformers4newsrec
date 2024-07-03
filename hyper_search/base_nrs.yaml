@@ -16,32 +16,35 @@ topic_num_0:
     choices:
         - 10
         - 70
-        - 120
 
 topic_num_1:
     name: "topic_num"
     choices:
         - 20
         - 60
-        - 110
 
 topic_num_2:
     name: "topic_num"
     choices:
         - 40
         - 50
-        - 100
 
 topic_num_3:
     name: "topic_num"
     choices:
         - 30
         - 80
-        - 90
 
 topic_dim:
     name: "topic_dim"
-    low: 10
-    high: 30
-    log: False
-    step: 10
+    choices:
+        - 10
+        - 20
+
+per_device_train_batch_size:
+    name: "per_device_train_batch_size"
+    choices:
+        - 16
+        - 32
+        - 64
+        - 128
