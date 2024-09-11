@@ -17,7 +17,7 @@ from .base import BaseNRS
 class GLORYRSModel(BaseNRS):
     """
     ✨ Going Beyond Local: Global Graph-Enhanced Personalized News Recommendations
-    Implement the model of GLORY: https://arxiv.org/pdf/2307.06576
+    Paper of GLORY: https://arxiv.org/pdf/2307.06576
     Source library: https://github.com/tinyrolls/GLORY
     """
     def __init__(self, **kwargs):
@@ -51,9 +51,11 @@ class GLORYRSModel(BaseNRS):
         self.news_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, word_embed_dim,
                                                        use_flash_att=self.use_flash_att)
         self.user_layer_name = kwargs.get("user_layer_name", "mha")
+        # local news encoder
         if self.user_layer_name == "mha":
             self.user_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, self.embedding_dim,
                                                            use_flash_att=self.use_flash_att)
+        # global news graph encoder
         if self.use_news_graph or self.use_news_graph_only:
             self.news_graph = load_news_graph(**kwargs)
             news_neighbors_num = kwargs.get("news_neighbors_num", 8)
@@ -76,6 +78,7 @@ class GLORYRSModel(BaseNRS):
             ])
         self.use_entity_feature = ((self.entity_feature and len(self.entity_feature)) and
                                    (self.use_local_entity or self.use_local_entity_only))
+        # local entity encoder
         if self.use_entity_feature:
             self.local_entity_encoder = Sequential("x, mask", [
                 (nn.Dropout(p=kwargs.get("dropout_le", 0.2)), "x -> x"),
@@ -87,7 +90,7 @@ class GLORYRSModel(BaseNRS):
                 (nn.Linear(self.entity_dim, self.embedding_dim), "x -> x"),
                 nn.LeakyReLU(0.2),
             ])
-
+        # global entity graph encoder
         if self.use_entity_graph or self.use_entity_graph_only:
             self.entity_graph = load_entity_graph(**kwargs)
             entity_neighbors_num = kwargs.get("entity_neighbors_num", 8)
@@ -114,10 +117,12 @@ class GLORYRSModel(BaseNRS):
                                        use_flash_att=self.use_flash_att), 'x,x,x,mask -> x,x_att'),
                 (AttLayer(self.head_num * self.head_dim, self.attention_hidden_dim), "x,mask -> x,x_att"),
             ])
+        # fusion method
         if self.fusion_method:
             self.late_fusion = LateFusion(self.fusion_method, self.head_num, self.head_dim)
             user_feature_num = sum([self.use_entity_feature, self.use_entity_graph, self.use_news_graph]) + 1
             self.fusion_aggregator = FusionAggregator(self.head_num, self.head_dim, user_feature_num)
+        # fused attention layer
         if self.use_fused_feature:
             self.fused_attention = AttLayer(self.embedding_dim, self.attention_hidden_dim)
 
