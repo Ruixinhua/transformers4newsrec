@@ -43,7 +43,7 @@ class UserAsGraphRSModel(BaseNRS):
         :return:
         """
         ...
-        return self.news_encoder(input_feat)  # placeholder implementation
+        return super().news_encoder(input_feat)  # placeholder implementation
 
     def user_encoder(self, input_feat):
         """
@@ -54,7 +54,7 @@ class UserAsGraphRSModel(BaseNRS):
         local_history_news = input_feat["history_news"]  # shape = (B, H, D)
         candidate_news_vector = self.get_mapping_vector(input_feat["news_vector"], input_feat["candidate_mapping"])
         ...
-        return self.user_encoder(input_feat)  # placeholder implementation
+        return super().user_encoder(input_feat)  # placeholder implementation
 
     def predict(self, candidate_news_vector, user_vector):
         """
@@ -64,4 +64,4 @@ class UserAsGraphRSModel(BaseNRS):
         :return:
         """
         ...
-        return self.predict(candidate_news_vector, user_vector)  # placeholder implementation
+        return super().predict(candidate_news_vector, user_vector)  # placeholder implementation
