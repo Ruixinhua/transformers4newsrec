@@ -6,6 +6,8 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import Sequential
 
 
 class ClickPredictor(nn.Module):
@@ -280,7 +282,8 @@ class BiAttentionLayer(nn.Module):
         if self.topic_layer_name == "variational_topic":
             scores = self.topic_layer(news_embeddings)
             log_q_theta = self.logsigma_q_theta(news_embeddings)
-            out_dict["kl_divergence"] = -0.5 * torch.sum(1+log_q_theta-scores.pow(2)-log_q_theta.exp(), dim=-1).mean()
+            out_dict["kl_divergence"] = -0.5 * torch.sum(1 + log_q_theta - scores.pow(2) - log_q_theta.exp(),
+                                                         dim=-1).mean()
             if self.training:  # reparameterization topic weight in training
                 std = torch.exp(0.5 * log_q_theta)
                 eps = torch.randn_like(std)
@@ -388,3 +391,79 @@ def activation_layer(act_name):
     else:
         raise NotImplementedError(f"Activation layer {act_name} is not implemented")
     return act_layer
+
+
+class LateFusion(nn.Module):
+    def __init__(self, fusion_method, head_num, head_dim):
+        super().__init__()
+
+        self.news_dim = head_num * head_dim
+        self.method = fusion_method
+
+        if self.method == 'weighted':
+            self.linear = nn.Linear(self.news_dim, self.news_dim)
+
+    def forward(self, his_emb, cand_emb, mask=None):
+
+        dot_product = torch.matmul(cand_emb, his_emb.permute(0, 2, 1))
+
+        if self.method == 'weighted':
+            dot_weight = torch.matmul(cand_emb, F.gelu(self.linear(his_emb)).permute(0, 2, 1))
+
+            if mask is not None:
+                mask_expanded = mask.unsqueeze(1).expand_as(dot_weight)
+                dot_weight_masked = dot_weight.masked_fill(mask_expanded == 0, -1e4)
+            else:
+                dot_weight_masked = dot_weight
+
+            dot_weight_softmax = F.softmax(dot_weight_masked, dim=-1)
+            weighted_dot_product = dot_product * dot_weight_softmax
+            weighted_sum = weighted_dot_product.sum(dim=-1)
+            score = weighted_sum
+
+        elif self.method == 'max':
+
+            if mask is not None:
+                mask_expanded = mask.unsqueeze(1).expand_as(dot_product)
+                dot_product_masked = dot_product.masked_fill(mask_expanded == 0, float('-inf'))
+            else:
+                dot_product_masked = dot_product
+
+            score, _ = dot_product_masked.max(dim=-1)
+
+        elif self.method == 'avg':
+
+            if mask is not None:
+                mask_expanded = mask.unsqueeze(1).expand_as(dot_product)
+                dot_product_masked = dot_product.masked_fill(mask_expanded == 0, 0)
+            else:
+                dot_product_masked = dot_product
+
+            score = dot_product_masked.mean(dim=-1)
+
+        else:
+            raise TypeError
+
+        return score
+
+
+class FusionAggregator(nn.Module):
+    def __init__(self, head_num, head_dim, user_feature_num):
+        super().__init__()
+        self.news_dim = head_num * head_dim
+        self.user_feature_num = user_feature_num
+        input_dim = self.news_dim * user_feature_num
+        self.mlp = Sequential('a', [
+            (lambda a: torch.cat(a, dim=-1), f'a -> x'),
+
+            nn.Linear(input_dim, self.news_dim * 2),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(self.news_dim * 2, int(self.news_dim * 1.5)),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(int(self.news_dim * 1.5), self.news_dim),
+        ])
+
+    def forward(self, user_vectors):
+        return self.mlp(user_vectors)
