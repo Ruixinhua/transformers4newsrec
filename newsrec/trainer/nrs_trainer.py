@@ -2,16 +2,14 @@
 # @Author        : Rui
 # @Time          : 2024/4/8 17:02
 # @Function      : Basic Trainer class inherited from transformers.trainer
-import torch
 import copy
 import os
 
-from datetime import datetime
 from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
 from omegaconf import OmegaConf
 from newsrec.config import TRAINING_ARGS, DEFAULT_ARGS
 from newsrec.data import *
-from newsrec.utils import collate_fn, init_model_class, get_project_root, compute_metrics
+from newsrec.utils import collate_fn, init_model_class, get_project_root, compute_metrics, save_test_results
 
 
 class NRSTrainer(Trainer):
@@ -19,8 +17,10 @@ class NRSTrainer(Trainer):
         # add date and time to run_name
         train_dataset = UserInteractionDataset(split="train", **kwargs)
         eval_dataset = UserInteractionDataset(split="dev", **kwargs)
-        model_name = kwargs.get("model_name", "NRMSRSModel")  # NRMSRSModel/BaseNRS
-        run_name = kwargs.get("run_name", f"{model_name}_{datetime.now().strftime(r'%y%m%d_%H%M')}")
+        model_name = kwargs.get("model_name")  # NRMSRSModel/BaseNRS
+        run_name = kwargs.get("run_name")
+        if model_name is None:
+            raise ValueError("model_name should be provided")
 
         def model_init(trial):
             model_config = kwargs.copy()
@@ -56,10 +56,12 @@ class NRSTrainer(Trainer):
 if __name__ == "__main__":
     config = OmegaConf.create(DEFAULT_ARGS)
     config.merge_with(OmegaConf.from_cli())
+    config.setdefault("run_name", f"{config.get('model_name')}")
     trainer = NRSTrainer(**config)
     running_mode = config.get("running_mode")
     if running_mode == "train_only":
         trainer.train(ignore_keys_for_eval=trainer.ignore_keys_for_eval)
+        test_results = save_test_results(trainer, config)
     elif running_mode == "hyper_search":
         def set_hp_name(trial):
             run_name = config.get("run_name", f"{config.get('model_name')}")

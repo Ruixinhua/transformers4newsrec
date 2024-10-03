@@ -3,6 +3,7 @@
 # @Time          : 2024/4/14 15:25
 # @Function      : Define the utils functions processing news data
 import json
+import os
 import pickle
 import pandas as pd
 import numpy as np
@@ -323,3 +324,30 @@ def load_user_history_mapper(**kwargs):
         history = history[-max_history_size:] + [0] * (max_history_size - len(history))
         user_history_mapper[history_uid[index]] = np.asarray(history, dtype=np.int32)
     return user_history_mapper
+
+
+def save_test_results(trainer, config):
+    test_results_filename = config.get("test_results_filename", f"test_results")
+    default_results_path = f"{config.get('root_dir', get_project_root())}/results/{test_results_filename}.csv"
+    os.makedirs(os.path.dirname(default_results_path), exist_ok=True)
+    test_results_path = config.get("test_results_path", default_results_path)
+    # load results_path first
+    if os.path.exists(test_results_path):
+        results_df = pd.read_csv(test_results_path)
+    else:
+        results_df = pd.DataFrame()
+    from newsrec.data import UserInteractionDataset
+    test_dataset = UserInteractionDataset(split="test", **config)
+    results = trainer.evaluate(test_dataset, metric_key_prefix="test")
+    saved_key_columns = config.get("saved_key_columns", ["run_name", "model_name", "text_feature", "subset_name"])
+    results.update({k: config.get(k) for k in saved_key_columns})
+    # save the dictionary of evaluation results to the result path with
+    results_df = pd.concat([results_df, pd.DataFrame([results])], ignore_index=True)
+    metrics_cols = ["test_monitor_metric", "test_group_auc", "test_mean_mrr", "test_ndcg_5", "test_ndcg_10"]
+    # remove duplicated columns according to metrics_cols + saved_key_columns
+    results_df = results_df.drop_duplicates(subset=metrics_cols + saved_key_columns)
+    # re-order columns by "run_name" + metrics_cols + all other columns
+    keys = [k for k in results_df.columns if k not in ["run_name"] + metrics_cols]
+    results_df = results_df[["run_name"] + metrics_cols + keys]
+    results_df.to_csv(test_results_path, index=False)
+    return results_df
