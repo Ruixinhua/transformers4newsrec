@@ -7,8 +7,9 @@ import copy
 import torch
 import torch.nn as nn
 from newsrec.data import load_news_graph, load_entity_graph
-from newsrec.model.general import MultiHeadAttentionAdv, AttLayer, LateFusion, FusionAggregator
-from torch_geometric.nn import Sequential, GatedGraphConv, GAT, GATConv, GraphSAGE
+from newsrec.utils import reshape_tensor
+from newsrec.model.general import LateFusion, FusionAggregator, BATMEncoder, MHAEncoder, AttLayerEncoder, GraphEncoder
+from torch_geometric.nn import Sequential
 from torch_geometric.data import Data
 from torch_geometric.utils import subgraph
 from .base import BaseNRS
@@ -21,23 +22,36 @@ class GLORYRSModel(BaseNRS):
     Source library: https://github.com/tinyrolls/GLORY
     """
     def __init__(self, **kwargs):
-        self.head_num, self.head_dim = kwargs.get("head_num", 20), kwargs.get("head_dim", 20)
-        self.embedding_dim = kwargs.get("embedding_dim", self.head_num * self.head_dim)
+        default_args = {
+            "head_num": 20, "head_dim": 20, "topic_num": 60, "topic_dim": 30, "topic_layer_name": "base_att",
+            "attention_hidden_dim": 200, "window_size": 3, "num_filters": 300, "use_news_mask": False,
+            "use_local_entity": False, "use_local_entity_only": False, "use_local_news_only": False,
+            "use_entity_graph": False, "use_entity_graph_only": False, "use_news_graph": False, "use_flash_att": False,
+            "use_news_graph_only": False, "use_candidate_local_entity": False, "use_candidate_entity_graph": False,
+            "use_candidate_news_graph": False, "use_fused_feature": False,
+            "fusion_method": "weighted", "use_same_fusion": False,  # weighted, max, avg; for user and candidate fusion
+            "aggregator_method": "mlp",  # mlp/att: to aggregate user and candidate features
+            "local_news_encoder_name": "batm_att",  # batm_att, mha_att
+            "use_user_mask": False, "user_encoder_name": "mha_att",  # mha_att, batm_att
+            "gnn_model": "GGNN",  # GGNN, GAT, GATConv, GraphSAGE
+            "dropout_ne": 0.2, "dropout_ue": 0.2, "dropout_eg": 0.2, "dropout_le": 0.2,
+            "k_hops_ng": 2, "k_hops_eg": 2, "entity_neighbors_num": 8, "news_neighbors_num": 8,
+        }
+        for key, value in default_args.items():
+            kwargs.setdefault(key, value)
         super().__init__(**kwargs)
         word_embed_dim = self.word_embedding.embed_dim
-        self.use_local_entity = kwargs.get("use_local_entity") is not None  # whether to use entity feature
-        self.use_local_entity_only = kwargs.get("use_local_entity_only", False)
-        self.use_local_news_only = kwargs.get("use_local_news_only", False)
-        self.use_entity_graph = kwargs.get("use_entity_graph", False)
-        self.use_entity_graph_only = kwargs.get("use_entity_graph_only", False)
-        self.use_news_graph = kwargs.get("use_news_graph", False)
-        self.use_news_graph_only = kwargs.get("use_news_graph_only", False)
-        self.use_candidate_local_entity = kwargs.get("use_candidate_local_entity", False)
-        self.use_candidate_entity_graph = kwargs.get("use_candidate_entity_graph", False)
-        self.use_candidate_news_graph = kwargs.get("use_candidate_news_graph", False)
-        self.use_fused_feature = kwargs.get("use_fused_feature", False)
-        self.fusion_method = kwargs.get("fusion_method", None)  # weighted, max, avg
-        self.gnn_model = kwargs.get("gnn_model", "GGNN")  # GGNN, GAT
+        self.use_local_entity, self.use_local_entity_only = kwargs["use_local_entity"], kwargs["use_local_entity_only"]
+        self.use_local_news_only = kwargs["use_local_news_only"]
+        self.use_entity_graph, self.use_entity_graph_only = kwargs["use_entity_graph"], kwargs["use_entity_graph_only"]
+        self.use_news_graph, self.use_news_graph_only = kwargs["use_news_graph"], kwargs["use_news_graph_only"]
+        self.use_candidate_local_entity = kwargs["use_candidate_local_entity"]
+        self.use_candidate_entity_graph = kwargs["use_candidate_entity_graph"]
+        self.use_candidate_news_graph = kwargs["use_candidate_news_graph"]
+        self.use_fused_feature = kwargs["use_fused_feature"]
+        self.fusion_method, self.aggregator_method = kwargs["fusion_method"], kwargs["aggregator_method"]
+        self.gnn_model, self.local_news_encoder_name = kwargs["gnn_model"], kwargs["local_news_encoder_name"]
+        self.user_encoder_name = kwargs["user_encoder_name"]
         self.fusion_method = None if self.fusion_method == "None" else self.fusion_method
         single_feature_num = sum([
             self.use_local_entity_only, self.use_local_news_only, self.use_entity_graph_only, self.use_news_graph_only
@@ -48,83 +62,105 @@ class GLORYRSModel(BaseNRS):
                 f"Only one of the following flags can be set to True: "
                 f"use_local_entity_only: {self.use_local_entity_only}; use_news_graph_only: {self.use_news_graph_only};"
                 f"use_local_news_only: {self.use_local_news_only}; use_entity_graph_only: {self.use_entity_graph_only}")
-        self.news_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, word_embed_dim,
-                                                       use_flash_att=self.use_flash_att)
-        self.user_layer_name = kwargs.get("user_layer_name", "mha")
+        if self.local_news_encoder_name.lower() == "mha_att":
+            self.local_news_encoder = Sequential("x,mask", [
+                (nn.Dropout(p=kwargs["dropout_ne"]), "x -> x"),
+                (MHAEncoder(input_feat_dim=word_embed_dim, head_num=kwargs["head_num"],
+                            head_dim=kwargs["head_dim"], use_flash_att=self.use_flash_att), "x,mask -> x,x_att"),
+                (AttLayerEncoder(kwargs["head_num"]*kwargs["head_dim"], self.attention_hidden_dim), "x,mask -> x,x_att")
+            ])
+        elif self.local_news_encoder_name.lower() == "batm_att":
+            self.local_news_encoder = Sequential("x,mask", [
+                (nn.Dropout(p=kwargs["dropout_ne"]), "x -> x"),
+                (BATMEncoder(input_feat_dim=word_embed_dim, **kwargs), "x,mask -> x,x_att"),
+                (AttLayerEncoder(word_embed_dim, self.attention_hidden_dim), "x,mask -> x,x_att")
+            ])
+        elif self.local_news_encoder_name.lower() == "batm_mha_att":
+            self.local_news_encoder = Sequential("x,mask", [
+                (nn.Dropout(p=kwargs["dropout_ne"]), "x -> x"),
+                (BATMEncoder(input_feat_dim=word_embed_dim, **kwargs), "x,mask -> x,x_att"),
+                (MHAEncoder(input_feat_dim=word_embed_dim, head_num=kwargs["head_num"],
+                            head_dim=kwargs["head_dim"], use_flash_att=self.use_flash_att), "x,mask -> x,x_att"),
+                (AttLayerEncoder(kwargs["head_num"]*kwargs["head_dim"], self.attention_hidden_dim), "x,mask -> x,x_att")
+            ])
+        else:
+            raise ValueError(f"Unknown local news encoder: {self.local_news_encoder_name}")
+        self.encoding_dim = self.local_news_encoder[-1].output_feat_dim  # news encoding dimension
         # local news encoder
-        if self.user_layer_name == "mha":
-            self.user_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, self.embedding_dim,
-                                                           use_flash_att=self.use_flash_att)
+        if self.user_encoder_name == "mha_att":
+            self.local_user_encoder = Sequential("x,mask", [
+                (nn.Dropout(p=kwargs["dropout_ue"]), "x -> x"),
+                (MHAEncoder(input_feat_dim=self.encoding_dim, head_num=kwargs["head_num"], head_dim=kwargs["head_dim"],
+                            output_feat_dim=self.encoding_dim, use_flash_att=self.use_flash_att), "x,mask -> x,x_att"),
+                (AttLayerEncoder(self.encoding_dim, self.attention_hidden_dim), "x,mask -> x,x_att")
+            ])
+        elif self.user_encoder_name == "batm_att":
+            self.local_user_encoder = Sequential("x,mask", [
+                (nn.Dropout(p=kwargs["dropout_ue"]), "x -> x"),
+                (BATMEncoder(input_feat_dim=self.encoding_dim, **kwargs), "x,mask -> x,x_att"),
+                (AttLayerEncoder(self.encoding_dim, self.attention_hidden_dim), "x,mask -> x,x_att")
+            ])
+        else:
+            raise ValueError(f"Unknown user encoder: {self.user_encoder_name}")
         # global news graph encoder
         if self.use_news_graph or self.use_news_graph_only:
             self.news_graph = load_news_graph(**kwargs)
-            news_neighbors_num = kwargs.get("news_neighbors_num", 8)
-            self.news_neighbor_mapper = self.news_graph.neighbor_mapper
-            neighbor_matrix = torch.zeros(len(self.news_neighbor_mapper) + 1, news_neighbors_num, dtype=torch.int32)
-            for k, v in self.news_neighbor_mapper.items():
-                neighbor_matrix[k, :min(news_neighbors_num, len(v))] = torch.tensor(v[:news_neighbors_num])
-            self.news_neighbors = nn.Embedding.from_pretrained(neighbor_matrix, freeze=True)
-            self.k_hops_ng = kwargs.get("k_hops_ng", 2)
-            if self.gnn_model.lower() == "gat":
-                gnn_model = GAT(self.embedding_dim, out_channels=self.embedding_dim, hidden_channels=64, num_layers=3)
-            elif self.gnn_model.lower() == "gatconv":
-                gnn_model = GATConv(self.embedding_dim, out_channels=self.embedding_dim)
-            elif self.gnn_model.lower() == "graphsage":
-                gnn_model = GraphSAGE(self.embedding_dim, 64, 3, self.embedding_dim)
-            else:
-                gnn_model = GatedGraphConv(self.embedding_dim, num_layers=3, aggr="add")
-            self.global_news_encoder = Sequential("x,index", [
-                (gnn_model, "x,index -> x"),
-            ])
+            self.k_hops_ng, self.news_neighbors_num = kwargs["k_hops_ng"], kwargs["news_neighbors_num"]
+            self.global_news_encoder = GraphEncoder(
+                self.news_graph, self.news_neighbors_num, gnn_model=self.gnn_model,
+                input_feat_dim=self.encoding_dim, output_feat_dim=self.encoding_dim
+            )
         self.use_entity_feature = ((self.entity_feature and len(self.entity_feature)) and
-                                   (self.use_local_entity or self.use_local_entity_only))
+                                   (self.use_local_entity or self.use_local_entity_only or
+                                    self.use_entity_graph or self.use_entity_graph_only))
         # local entity encoder
         if self.use_entity_feature:
-            self.local_entity_encoder = Sequential("x, mask", [
-                (nn.Dropout(p=kwargs.get("dropout_le", 0.2)), "x -> x"),
-                (MultiHeadAttentionAdv(int(self.entity_dim / self.head_dim), self.head_dim, self.entity_dim,
-                                       use_flash_att=self.use_flash_att),
-                 "x,x,x,mask -> x,x_att"),
-                (nn.Dropout(p=kwargs.get("dropout_le", 0.2)), "x -> x"),
-                (AttLayer(self.entity_dim, self.attention_hidden_dim), "x,mask -> x,x_att"),
-                (nn.Linear(self.entity_dim, self.embedding_dim), "x -> x"),
+            self.local_entity_encoder = Sequential("x,mask", [
+                (nn.Dropout(p=kwargs["dropout_le"]), "x -> x"),
+                (MHAEncoder(input_feat_dim=self.entity_dim, head_num=int(self.entity_dim / kwargs["head_dim"]),
+                            head_dim=kwargs["head_dim"], use_flash_att=self.use_flash_att),
+                 "x,mask -> x,x_att"),
+                (nn.Dropout(p=kwargs["dropout_le"]), "x -> x"),
+                (AttLayerEncoder(self.entity_dim, self.attention_hidden_dim), "x,mask -> x,x_att"),
+                (nn.Linear(self.entity_dim, self.encoding_dim), "x -> x"),
                 nn.LeakyReLU(0.2),
             ])
         # global entity graph encoder
         if self.use_entity_graph or self.use_entity_graph_only:
             self.entity_graph = load_entity_graph(**kwargs)
-            entity_neighbors_num = kwargs.get("entity_neighbors_num", 8)
-            self.entity_neighbor_mapper = self.entity_graph.neighbor_mapper
-            neighbor_matrix = torch.zeros(len(self.entity_neighbor_mapper)+1, entity_neighbors_num, dtype=torch.int32)
-            for k, v in self.entity_neighbor_mapper.items():
-                neighbor_matrix[k, :min(entity_neighbors_num, len(v))] = torch.tensor(v[:entity_neighbors_num])
-            self.entity_neighbors = nn.Embedding.from_pretrained(neighbor_matrix, freeze=True)
-            self.k_hops_eg = kwargs.get("k_hops_eg", 2)
-            if self.gnn_model.lower() == "gat":
-                gnn_model = GAT(self.entity_dim, out_channels=self.entity_dim, hidden_channels=64, num_layers=3)
-            elif self.gnn_model.lower() == "gatconv":
-                gnn_model = GATConv(self.entity_dim, out_channels=self.entity_dim)
-            elif self.gnn_model.lower() == "graphsage":
-                gnn_model = GraphSAGE(self.entity_dim, 64, 3, self.entity_dim)
-            else:
-                gnn_model = GatedGraphConv(self.entity_dim, num_layers=3, aggr="add")
-            self.global_entity_encoder = Sequential("x,index", [
-                (gnn_model, "x,index -> x"),
-            ])
+            self.k_hops_eg, self.entity_neighbors_num = kwargs["k_hops_eg"], kwargs["entity_neighbors_num"]
+            self.global_entity_encoder = GraphEncoder(
+                self.entity_graph, self.entity_neighbors_num, gnn_model=self.gnn_model,
+                input_feat_dim=self.entity_dim, output_feat_dim=self.entity_dim
+            )
             self.global_entity_att = Sequential('x, mask', [
                 (nn.Dropout(p=kwargs.get("dropout_eg", 0.2)), 'x -> x'),
-                (MultiHeadAttentionAdv(self.head_num, self.head_dim, self.entity_dim,
-                                       use_flash_att=self.use_flash_att), 'x,x,x,mask -> x,x_att'),
-                (AttLayer(self.head_num * self.head_dim, self.attention_hidden_dim), "x,mask -> x,x_att"),
+                (MHAEncoder(input_feat_dim=self.entity_dim, head_num=kwargs["head_num"], head_dim=kwargs["head_dim"],
+                            use_flash_att=self.use_flash_att, output_feat_dim=self.encoding_dim), 'x,mask -> x,x_att'),
+                (AttLayerEncoder(self.encoding_dim, self.attention_hidden_dim), "x,mask -> x,x_att"),
             ])
         # fusion method
         if self.fusion_method:
-            self.late_fusion = LateFusion(self.fusion_method, self.head_num, self.head_dim)
-            user_feature_num = sum([self.use_entity_feature, self.use_entity_graph, self.use_news_graph]) + 1
-            self.fusion_aggregator = FusionAggregator(self.head_num, self.head_dim, user_feature_num)
+            # late fusion layer: Input_shape = List of tensors (B, F, D), Output_shape = (B, F, D)
+            self.late_fusion = LateFusion(self.fusion_method, self.encoding_dim)
+            user_feature_num = sum([self.use_local_entity, self.use_entity_graph, self.use_news_graph]) + 1
+            self.user_fusion_aggregator = FusionAggregator(
+                self.encoding_dim, user_feature_num, kwargs["attention_hidden_dim"], self.aggregator_method
+            )
+            cand_feature_num = sum([self.use_candidate_local_entity, self.use_candidate_entity_graph,
+                                    self.use_candidate_news_graph]) + 1
+            if kwargs["use_same_fusion"] and user_feature_num == cand_feature_num:
+                self.cand_fusion_aggregator = self.user_fusion_aggregator
+            else:
+                if kwargs["use_same_fusion"]:
+                    print("The number of user and candidate features are different. Use different fusion network.")
+                self.cand_fusion_aggregator = FusionAggregator(
+                    self.encoding_dim, cand_feature_num, kwargs["attention_hidden_dim"], self.aggregator_method
+                )
+
         # fused attention layer
         if self.use_fused_feature:
-            self.fused_attention = AttLayer(self.embedding_dim, self.attention_hidden_dim)
+            self.fused_attention = AttLayerEncoder(self.encoding_dim, self.attention_hidden_dim)
 
     def build_input_feat(self, input_feat):
         history_nid, history_mask = input_feat["history_nid"], input_feat["history_mask"]
@@ -136,7 +172,7 @@ class GLORYRSModel(BaseNRS):
                 current = torch.tensor([0], device=history_nid.device, dtype=torch.int32)
             history_neighbor_all = copy.deepcopy(current)
             for _ in range(self.k_hops_ng):  # get the neighbors of the history news and append to all list
-                current = self.news_neighbors(current)  # get current history news neighbors
+                current = self.global_news_encoder.neighbors(current)  # get current history news neighbors
                 history_neighbor_all = torch.cat([history_neighbor_all, torch.masked_select(current, current != 0)])
             history_neighbor_all = torch.unique(history_neighbor_all)  # remove duplicates
             input_feat["nid"] = torch.unique(torch.cat((history_neighbor_all, candidate_selected), dim=0))
@@ -166,20 +202,27 @@ class GLORYRSModel(BaseNRS):
         news_all_feature = self.feature_embedding(input_feat["nid"])  # shape = (B*(H+C), F)
         news_feature_dict = self.feature_embedding.select_feature(news_all_feature)
         news_tokens = torch.cat([news_feature_dict[feature] for feature in self.text_feature], dim=-1)
+        if len(news_tokens.shape) == 3:
+            news_tokens = reshape_tensor(news_tokens)  # out: (B * (H+C), F)
         # news_tokens: shape = (B*(H+C), F), F is the sum of feature used in news
         news_mask = torch.where(news_tokens == self.pad_token_id, 0, 1).to(news_tokens.device)  # shape = (B*(H+C), F)
         word_vector = self.dropout_we(self.word_embedding(news_tokens, news_mask))  # shape = (B*(H+C), F, E)
         output_dict = {"word_vector": word_vector, "news_mask": news_mask}
         if self.use_entity_feature:
-            output_dict.update({"entity_vector": self.entity_embedding(news_feature_dict["entity"])})
+            entity_tokens = news_feature_dict["entity"]
+            if len(entity_tokens.shape) == 3:
+                entity_tokens = reshape_tensor(entity_tokens)
+            output_dict.update({"entity_vector": self.entity_embedding(entity_tokens)})
         if self.use_entity_graph or self.use_entity_graph_only:
             entity = torch.masked_select(news_feature_dict["entity"], news_feature_dict["entity"] != 0)
             entity_neighbors_all = copy.deepcopy(entity)
             for _ in range(self.k_hops_eg):
-                entity = self.entity_neighbors(entity)
+                entity = self.global_entity_encoder.neighbors(entity)
                 entity_neighbors_all = torch.cat([entity_neighbors_all, torch.masked_select(entity, entity != 0)])
             entity_neighbors_all = torch.unique(entity_neighbors_all)
             entity_mapping, = self.get_mapping_index(entity_neighbors_all, news_feature_dict["entity"])
+            if len(entity_mapping.shape) == 3:
+                entity_mapping = reshape_tensor(entity_mapping)
             edge_index = self.entity_graph.graph_data.edge_index.to(entity.device)
             edge_attr = self.entity_graph.graph_data.edge_attr.to(entity.device)
             sub_edge_index, sub_edge_attr = subgraph(
@@ -205,13 +248,8 @@ class GLORYRSModel(BaseNRS):
         news_mask = text_features["news_mask"]
         if not self.use_news_mask:
             news_mask = None
-        y = self.news_encode_layer(word_vector, word_vector, word_vector, news_mask)[0]  # shape = (B*(H+C), F, D)
-        # y = self.layer_norm(self.dropout_ne(y))
-        y = self.dropout_ne(y)
-        # add activation function
-        # output = self.layer_norm(self.news_layer(y)[0])
-        output = self.news_layer(y)[0]
-        news_features = {"news_vector": output}
+        news_vector, _ = self.local_news_encoder(word_vector, news_mask)
+        news_features = {"news_vector": news_vector}
         if self.use_entity_feature:
             news_features.update({
                 "entity_vector": self.local_entity_encoder(text_features.get("entity_vector"), None)
@@ -224,20 +262,28 @@ class GLORYRSModel(BaseNRS):
         return news_features
 
     def user_encoder(self, input_feat):
+        """
+        Encode user using news vector and user attention layer
+        :param input_feat:
+        :return:
+        user vector, shape = (B, E) or (B, H, E) for fusion method
+        candidate news vector, shape = (B, C, E)
+        """
         local_history_news = input_feat["history_news"]  # shape = (B, H, D)
         candidate_news_vector = self.get_mapping_vector(input_feat["news_vector"], input_feat["candidate_mapping"])
         # shape = (B, C, D)
         batch_size = local_history_news.shape[0]
+        user_mask = None
+        if self.use_user_mask:
+            user_mask = input_feat["history_mask"]
         user_feature = None
-        user_vectors, candidate_vectors = [local_history_news], []
-        if self.use_candidate_local_entity or self.use_candidate_entity_graph or self.use_candidate_news_graph:
-            candidate_vectors = [candidate_news_vector.reshape(-1, self.embedding_dim)]  # (B*C, D)
-        if self.use_entity_feature:
+        user_vectors, candidate_vectors = [local_history_news], [candidate_news_vector.reshape(-1, self.encoding_dim)]
+        if self.use_local_entity or self.use_local_entity_only:
             user_entity = self.get_mapping_vector(input_feat["entity_vector"], input_feat["history_mapping"])
             cand_entity = self.get_mapping_vector(input_feat["entity_vector"], input_feat["candidate_mapping"])
             user_vectors.append(user_entity)
             if self.use_candidate_local_entity:
-                candidate_vectors.append(cand_entity.reshape(-1, self.embedding_dim))
+                candidate_vectors.append(cand_entity.reshape(-1, self.encoding_dim))
             if self.use_local_entity_only:
                 user_feature = user_entity
                 candidate_news_vector = cand_entity if self.use_candidate_local_entity else candidate_news_vector
@@ -246,7 +292,7 @@ class GLORYRSModel(BaseNRS):
             entity_graph_c = self.get_mapping_vector(input_feat["entity_graph_vector"], input_feat["candidate_mapping"])
             user_vectors.append(entity_graph_u)
             if self.use_candidate_entity_graph:
-                candidate_vectors.append(entity_graph_c.reshape(-1, self.embedding_dim))
+                candidate_vectors.append(entity_graph_c.reshape(-1, self.encoding_dim))
             if self.use_entity_graph_only:
                 user_feature = entity_graph_u
                 candidate_news_vector = entity_graph_c if self.use_candidate_entity_graph else candidate_news_vector
@@ -254,31 +300,31 @@ class GLORYRSModel(BaseNRS):
             graph_vector = self.global_news_encoder(input_feat["news_vector"], input_feat["sub_graph"].edge_index)
             user_graph_vector = self.get_mapping_vector(graph_vector, input_feat["history_mapping"])
             cand_graph_vector = self.get_mapping_vector(graph_vector, input_feat["candidate_mapping"])
-            candidate_vectors.append(cand_graph_vector.reshape(-1, self.embedding_dim))
             user_vectors.append(user_graph_vector)
+            if self.use_candidate_news_graph:
+                candidate_vectors.append(cand_graph_vector.reshape(-1, self.encoding_dim))
             if self.use_news_graph_only:
                 user_feature = user_graph_vector
-                candidate_news_vector = cand_graph_vector if self.use_candidate_entity_graph else candidate_news_vector
+                candidate_news_vector = cand_graph_vector if self.use_candidate_news_graph else candidate_news_vector
         if self.use_fused_feature:
-            user_feature = torch.stack(user_vectors, dim=2).view(-1, len(user_vectors), self.embedding_dim)
-            user_feature = self.fused_attention(user_feature)[0].view(batch_size, -1, self.embedding_dim)
+            user_feature = torch.stack(user_vectors, dim=2).view(-1, len(user_vectors), self.encoding_dim)
+            user_feature = self.fused_attention(user_feature)[0].view(batch_size, -1, self.encoding_dim)
             # shape = (B, F, H, D)
             if self.use_candidate_local_entity or self.use_candidate_entity_graph or self.use_candidate_news_graph:
                 candidate_vectors = torch.stack(candidate_vectors, dim=1)  # shape = (B*C, F, D)
                 candidate_vectors = self.fused_attention(candidate_vectors)[0]  # shape = (B*C, D)
-                candidate_news_vector = candidate_vectors.view(batch_size, -1, self.embedding_dim)  # shape = (B, C, D)
+                candidate_news_vector = candidate_vectors.view(batch_size, -1, self.encoding_dim)  # shape = (B, C, D)
 
         if self.use_local_news_only or user_feature is None:
             user_feature = local_history_news
         if self.fusion_method:
-            user_vector = self.fusion_aggregator(user_vectors)
-            out_dict = {"user_vector": user_vector, "user_weight": None, "candidate_news_vector": candidate_news_vector}
+            user_vector = self.user_fusion_aggregator(user_vectors)
+            candidate_vectors = [vector.view(batch_size, -1, self.encoding_dim) for vector in candidate_vectors]
+            candidate_news_vector = self.cand_fusion_aggregator(candidate_vectors)
         else:
             # user_feature: shape = (B, H, D); candidate_news_vector: shape = (B, C, D)
-            user_embed = self.user_encode_layer(user_feature, user_feature, user_feature)[0]  # shape = (B, H, D)
-            out = self.user_layer(user_embed)  # additive attention layer: shape = (B, D)
-            out_dict = {"user_vector": out[0], "user_weight": out[1], "candidate_news_vector": candidate_news_vector}
-        return out_dict
+            user_vector, _ = self.local_user_encoder(user_feature, user_mask)
+        return {"user_vector": user_vector, "candidate_news_vector": candidate_news_vector}
 
     def predict(self, candidate_news_vector, user_vector):
         """
