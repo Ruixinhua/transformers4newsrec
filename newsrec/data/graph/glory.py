@@ -51,7 +51,7 @@ class NewsGraph:
         news_dict = dict(zip(news_data["news_id"], news_data["nid"]))
         user_interaction_data = load_dataset_from_csv(f"user_interaction_{kwargs.get('subset_name')}")
         user_history = dict(zip(user_interaction_data["uid"], user_interaction_data["history"]))
-        news_graph_source = kwargs.get("news_graph_source", "all_users")
+        news_graph_source = kwargs.get("news_graph_source", "train_users")
         if news_graph_source == "all_users":
             edge_list = [[int(h) for h in user_history[user].split()] for user in user_history]
         else:
@@ -59,16 +59,23 @@ class NewsGraph:
             train_users = set(train_data["uid"])
             edge_list = [[int(h) for h in user_history[user].split()] for user in train_users]
         node_feat = np.asarray([0] + list(news_dict.values()))  # add zero for the padding nid
-        graph_type = kwargs.get("graph_type", "trajectory")  # graph tye should be "trajectory" or "co_occurrence"
+        graph_type, construct_method = kwargs.get("graph_type", "trajectory"), kwargs.get("construct_method", "end")
+        # graph tye should be "trajectory" or "co_occurrence"; construct method should be "end"-connection, "full", "no"
         short_edges = []
         for edge in edge_list:
             if graph_type == "trajectory":
                 short_edges.extend([(edge[i], edge[i + 1]) for i in range(len(edge) - 1)])
+                if construct_method == "end":
+                    if len(edge) > 0:
+                        short_edges.append((edge[-1], 0))
             elif graph_type == "co_occurrence":
                 for i in range(len(edge) - 1):
                     for j in range(i + 1, len(edge)):
                         short_edges.append((edge[i], edge[j]))
                         short_edges.append((edge[j], edge[i]))
+                if construct_method == "end":
+                    if len(edge) > 0:
+                        short_edges.append((edge[-1], 0))
             else:
                 raise ValueError("Graph type should be 'trajectory' or 'co_occurrence'")
         edge_weights = Counter(short_edges)
@@ -91,7 +98,9 @@ def load_news_graph(**kwargs):
     :param kwargs: subset_name, saved_news_graph_path
     :return: a NewsGraph object
     """
-    default_path = f"{get_project_root()}/cached/glory_news_graph_{kwargs.get('subset_name')}.bin"
+    default_name = (f"glory_news_graph_{kwargs.get('subset_name')}_{kwargs.get('news_graph_source', 'train_users')}_"
+                    f"{kwargs.get('graph_type', 'trajectory')}_{kwargs.get('construct_method', 'end')}")
+    default_path = f"{get_project_root()}/cached/{default_name}.bin"
     saved_news_graph_path = Path(kwargs.get("saved_news_graph_path", default_path))
     if saved_news_graph_path.exists() and kwargs.get("use_cached_news_graph"):
         with open(saved_news_graph_path, "rb") as file:
