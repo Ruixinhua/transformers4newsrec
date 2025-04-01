@@ -47,15 +47,15 @@ class NewsGraph:
         return sub_news_graph
 
     def __init__(self, **kwargs):
-        news_data = load_dataset_from_csv(f"news_{kwargs.get('subset_name')}")
+        news_data = load_dataset_from_csv(f"news_{kwargs.get('subset_name')}", **kwargs)
         news_dict = dict(zip(news_data["news_id"], news_data["nid"]))
-        user_interaction_data = load_dataset_from_csv(f"user_interaction_{kwargs.get('subset_name')}")
+        user_interaction_data = load_dataset_from_csv(f"user_interaction_{kwargs.get('subset_name')}", **kwargs)
         user_history = dict(zip(user_interaction_data["uid"], user_interaction_data["history"]))
         news_graph_source = kwargs.get("news_graph_source", "train_users")
         if news_graph_source == "all_users":
             edge_list = [[int(h) for h in user_history[user].split()] for user in user_history]
         else:
-            train_data = load_dataset_from_csv(f"train_{kwargs.get('subset_name')}")
+            train_data = load_dataset_from_csv(f"train_{kwargs.get('subset_name')}", **kwargs)
             train_users = set(train_data["uid"])
             edge_list = [[int(h) for h in user_history[user].split()] for user in train_users]
         node_feat = np.asarray([0] + list(news_dict.values()))  # add zero for the padding nid
@@ -100,7 +100,7 @@ def load_news_graph(**kwargs):
     """
     default_name = (f"glory_news_graph_{kwargs.get('subset_name')}_{kwargs.get('news_graph_source', 'train_users')}_"
                     f"{kwargs.get('graph_type', 'trajectory')}_{kwargs.get('construct_method', 'end')}")
-    default_path = f"{get_project_root()}/cached/{default_name}.bin"
+    default_path = f"{get_project_root(**kwargs)}/cached/{default_name}.bin"
     saved_news_graph_path = Path(kwargs.get("saved_news_graph_path", default_path))
     if saved_news_graph_path.exists() and kwargs.get("use_cached_news_graph"):
         with open(saved_news_graph_path, "rb") as file:
@@ -155,7 +155,7 @@ def load_entity_graph(**kwargs):
     entity_feature = [entity_feature] if isinstance(entity_feature, str) else entity_feature
     entity_name = "title_abstract" if "ab_entity" in entity_feature else "title"
     default_name = f"glory_entity_graph_{entity_name}_{kwargs.get('subset_name')}"
-    default_path = f"{get_project_root()}/cached/{default_name}.bin"
+    default_path = f"{get_project_root(**kwargs)}/cached/{default_name}.bin"
     saved_entity_graph_path = Path(kwargs.get("saved_entity_graph_path", default_path))
     if saved_entity_graph_path.exists() and kwargs.get("use_cached_entity_graph"):
         with open(saved_entity_graph_path, "rb") as file:

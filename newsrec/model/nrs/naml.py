@@ -31,6 +31,7 @@ class NAMLRSModel(BaseNRS):
             self.body_att = AttLayer(self.num_filters, self.attention_hidden_dim)
         self.multi_att = AttLayer(self.num_filters, self.attention_hidden_dim)
         self.news_layer = None  # set to None for NAML model
+        self.user_layer = AttLayer(self.num_filters, self.attention_hidden_dim)
 
     def news_encoder(self, input_feat):
         """input_feat contains: news title, body, category, and subvert"""
@@ -44,6 +45,7 @@ class NAMLRSModel(BaseNRS):
             # feature_tokens: shape = (B, H+C, F), F is the sum of feature used in news
             if len(feature_tokens.shape) == 3:
                 feature_tokens = reshape_tensor(feature_tokens)  # out: (B * (H+C), F)
+                feature_mask = reshape_tensor(feature_mask)
             feature_vector = self.dropout_we(self.word_embedding(feature_tokens, feature_mask))
             feature_cnn, feature_att = getattr(self, f"{feature}_cnn"), getattr(self, f"{feature}_att")
             feature_vector = self.dropout_ne(feature_cnn(feature_vector.transpose(1, 2)).transpose(1, 2))

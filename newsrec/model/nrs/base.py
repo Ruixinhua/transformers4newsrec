@@ -32,6 +32,7 @@ class BaseNRS(BaseModel):
         self.uid_embedding = FrozenEmbedding(len(self.user_history), self.embedding_dim)  # user_num, embed_dim
         self.load_embedding = False  # set to false when training and at the beginning of the evaluation
         self.fast_evaluation = kwargs.get("fast_evaluation")
+        self.fast_training = kwargs.get("fast_training", True)
         self.criterion = getattr(module_loss, kwargs.get("loss"))
         self.pad_token_id = int(load_tokenizer(**kwargs).pad_token_id)
         # news feature can be used: title, abstract, body, category, subvert
@@ -106,7 +107,7 @@ class BaseNRS(BaseModel):
         y = self.user_layer(input_feat["history_news"])  # shape = (B, H, E)
         return {"user_vector": y[0], "user_weight": y[1]}
 
-    def predict(self, candidate_news_vector, user_vector):
+    def predict(self, candidate_news_vector, user_vector, **kwargs):
         """
         prediction logic: use MLP or Dot-product for prediction
         :param candidate_news_vector: shape = (B, C, D)
@@ -135,6 +136,11 @@ class BaseNRS(BaseModel):
         return source_vectors[mapping_idx, ...].masked_fill(mask, 0)
 
     def build_input_feat(self, input_feat):
+        """
+        Build input feature for the news and user encoders.
+        :param input_feat: history_nid, history_mask, candidate_nid, candidate_mask
+        :return: input_feat["nid"] used for the news encoder; history_mapping, candidate_mapping for mapping index
+        """
         history_nid, history_mask = input_feat["history_nid"], input_feat["history_mask"]
         candidate_nid, candidate_mask = input_feat["candidate_nid"], input_feat["candidate_mask"]
         history_selected = torch.masked_select(history_nid, history_mask)  # select history based on mask
@@ -161,7 +167,13 @@ class BaseNRS(BaseModel):
             self.load_embedding = False
         input_feat = {"uid": uid, "history_nid": history_nid, "candidate_nid": candidate_nid,
                       "history_mask": history_mask, "candidate_mask": candidate_mask}
-        input_feat = self.build_input_feat(input_feat)
+        if self.fast_training:
+            input_feat = self.build_input_feat(input_feat)
+        else:
+            input_feat["nid"] = torch.cat([history_nid, candidate_nid], dim=1)
+            uid_history = uid.repeat_interleave(history_mask.shape[1])
+            uid_candidate = uid.repeat_interleave(candidate_mask.shape[1])
+            input_feat["uid_expand"] = torch.cat((uid_history, uid_candidate))
         if not self.training and not self.load_embedding and self.fast_evaluation:
             """run model to generate embedding caches for evaluation"""
             self.load_embedding = True
@@ -189,16 +201,24 @@ class BaseNRS(BaseModel):
             news_feature = self.news_encoder(input_feat)  # shape = (B*(H+C), E)
             news_vector = news_feature["news_vector"]
             # fetch history news vector from all news vectors
-            input_feat["history_news"] = self.get_mapping_vector(news_vector, input_feat["history_mapping"])
+            if self.fast_training:
+                input_feat["history_news"] = self.get_mapping_vector(news_vector, input_feat["history_mapping"])
+                input_feat["candidate_news"] = self.get_mapping_vector(news_vector, input_feat["candidate_mapping"])
+            else:
+                news_vector = reshape_tensor(news_feature["news_vector"], (uid.size(0), -1, news_vector.size(-1)))
+                input_feat["history_news"] = news_vector[:, :history_nid.size(1), :]
+                input_feat["candidate_news"] = news_vector[:, history_nid.size(1):, :]
             input_feat.update(news_feature)
             # run user encoder
             output_dict = self.user_encoder(input_feat)
             user_vector = output_dict["user_vector"]
-            # candidate_news_vector = news_vector[:, history_nid.size(1):, :]
-            # fetch candidate news vector from all news vectors
-            candidate_vector = self.get_mapping_vector(news_vector, input_feat["candidate_mapping"])
-            candidate_news_vector = output_dict.get("candidate_news_vector", candidate_vector)
-        prediction = self.predict(candidate_news_vector, user_vector)
+            if self.fast_training:
+                candidate_vector = self.get_mapping_vector(news_vector, input_feat["candidate_mapping"])
+                candidate_news_vector = output_dict.get("candidate_news_vector", candidate_vector)
+            else:
+                # fetch candidate news vector from all news vectors
+                candidate_news_vector = output_dict.get("candidate_news_vector", input_feat["candidate_news"])
+        prediction = self.predict(candidate_news_vector, user_vector, mask=history_mask)
         loss = self.compute_loss(prediction, kwargs.get("label"))
         model_output = {"loss": loss, "prediction": prediction}
         return model_output

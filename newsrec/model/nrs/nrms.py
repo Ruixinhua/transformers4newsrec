@@ -20,13 +20,7 @@ class NRMSRSModel(BaseNRS):
         self.embedding_dim = kwargs.get("embedding_dim", self.head_num * self.head_dim)
         super().__init__(**kwargs)
         self.news_encode_layer = MultiHeadAttention(self.head_num, self.head_dim, self.word_embedding.embed_dim)
-        self.user_layer_name = kwargs.get("user_layer_name", "mha")
-        if self.user_layer_name == "mha":
-            self.user_encode_layer = MultiHeadAttention(self.head_num, self.head_dim, self.embedding_dim)
-        elif self.user_layer_name == "gru":
-            self.user_encode_layer = nn.GRU(self.embedding_dim, self.embedding_dim, batch_first=True)
-        else:
-            raise ValueError(f"Invalid user layer name: {self.user_layer_name}")
+        self.user_encode_layer = MultiHeadAttention(self.head_num, self.head_dim, self.embedding_dim)
 
     def news_encoder(self, input_feat):
         """
@@ -53,16 +47,9 @@ class NRMSRSModel(BaseNRS):
 
     def user_encoder(self, input_feat):
         x = input_feat["history_news"]  # shape = (B, H, D)
-        if self.user_layer_name == "mha":  # the methods used by NRMS original paper
-            user_mask = None
-            if self.use_user_mask:
-                user_mask = input_feat["history_mask"]
-            y = self.user_encode_layer(x, x, x, user_mask)[0]  # shape = (B, H, D)
-            user_vector, user_weight = self.user_layer(y, user_mask)  # shape = (B, D)
-            return {"user_vector": user_vector, "user_weight": user_weight}
-        elif self.user_layer_name == "gru":
-            y = self.user_encode_layer(x)[0]  # shape = (B, H, D)
-            y = self.user_layer(y)  # additive attention layer: shape = (B, D)
-            return {"user_vector": y[0], "user_weight": y[1]}
-        else:
-            raise ValueError(f"Invalid user layer name: {self.user_layer_name}")
+        user_mask = None
+        if self.use_user_mask:
+            user_mask = input_feat["history_mask"]
+        y = self.user_encode_layer(x, x, x, user_mask)[0]  # shape = (B, H, D)
+        user_vector, user_weight = self.user_layer(y, user_mask)  # shape = (B, D)
+        return {"user_vector": user_vector, "user_weight": user_weight}
