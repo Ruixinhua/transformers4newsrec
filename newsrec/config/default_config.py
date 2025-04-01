@@ -22,9 +22,6 @@ TRAINING_ARGS = {
     "group_by_length": False,  # Whether group together samples of roughly the same length for the training dataset
     "remove_unused_columns": False,  # Whether to automatically remove the columns unused by the model forward method.
     "skip_memory_metrics": True,  # report memory metrics will slow train and evaluation speed
-    "accelerator_config": {  # accelerator config for multi-device training
-        "split_batches": False, "dispatch_batches": False, "even_batches": True, "use_seedable_sampler": True
-    }
 }
 
 # setup some default arguments of loading dataset and model
