@@ -56,7 +56,7 @@ class HieRecRSModel(BaseNRS):
         ...
         return super().user_encoder(input_feat)  # placeholder implementation
 
-    def predict(self, candidate_news_vector, user_vector):
+    def predict(self, candidate_news_vector, user_vector, **kwargs):
         """
 
         :param candidate_news_vector:

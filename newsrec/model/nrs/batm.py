@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from torch.nn.utils.rnn import pack_padded_sequence
-from newsrec.model.general import BiAttentionLayer, AttLayer
+from newsrec.model.general import BiAttentionLayer, AttLayer, MultiHeadAttentionAdv
 from .base import BaseNRS
 
 
@@ -11,9 +11,15 @@ class BATMRSModel(BaseNRS):
         super().__init__(**kwargs)
         self.bi_attention_layer = BiAttentionLayer(**kwargs)
         self.news_encoder_name = kwargs.get("news_encoder_name", "base")
-        self.user_encoder_name = kwargs.get("user_encoder_name", "bi_attention")
+        self.user_encoder_name = kwargs.get("user_encoder_name", "batm")
         self.topic_num, self.topic_dim = kwargs.get("topic_num", 50), kwargs.get("topic_dim", 20)
+        self.head_num, self.head_dim = kwargs.get("head_num", 30), kwargs.get("head_dim", 10)
         topic_dim = self.topic_num * self.topic_dim
+        if self.news_encoder_name == "multi_view":
+            self.topic_att = AttLayer(self.embedding_dim * 2, self.attention_hidden_dim)
+            self.topic_affine = nn.Linear(self.embedding_dim * 2, self.embedding_dim)
+        elif self.news_encoder_name == "mha":
+            self.news_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, self.embedding_dim)
         # the structure of basic model
         if self.user_encoder_name == "gru":
             self.user_encode_layer = nn.GRU(self.embedding_dim, self.embedding_dim, batch_first=True)
@@ -21,9 +27,10 @@ class BATMRSModel(BaseNRS):
             self.user_encode_layer = nn.Sequential(nn.Linear(self.embedding_dim, topic_dim), nn.Tanh(),
                                                    nn.Linear(topic_dim, self.topic_num))
             self.user_final = nn.Linear(self.embedding_dim, self.embedding_dim)
-        if self.news_encoder_name == "multi_view":
-            self.topic_att = AttLayer(self.embedding_dim * 2, self.attention_hidden_dim)
-            self.topic_affine = nn.Linear(self.embedding_dim * 2, self.embedding_dim)
+        elif self.user_encoder_name == "mha":
+            self.user_encode_layer = MultiHeadAttentionAdv(self.head_num, self.head_dim, self.embedding_dim)
+        else:
+            self.user_final = nn.Linear(self.embedding_dim, self.embedding_dim)
 
     def extract_topic(self, input_feat):
         word_vector, news_mask = self.text_feature_encoder(input_feat)  # shape = (B*(H+C), F, E)
@@ -50,21 +57,24 @@ class BATMRSModel(BaseNRS):
         return out_dict
 
     def user_encoder(self, input_feat):
-        history_news = input_feat["history_news"]
+        x = input_feat["history_news"]
         if self.user_encoder_name == "gru":
             history_length = torch.sum(input_feat["history_mask"], dim=-1).cpu()
             history_length[history_length == 0] = 1  # avoid zero history recording
-            packed_y = pack_padded_sequence(history_news, history_length, batch_first=True, enforce_sorted=False)
+            packed_y = pack_padded_sequence(x, history_length, batch_first=True, enforce_sorted=False)
             user_vector = self.user_encode_layer(packed_y)[1].squeeze(dim=0)
             user_weight = None
             # y = self.user_encode_layer(history_news)[0]
             # user_vector, user_weight = self.user_layer(y)  # additive attention layer
         elif self.user_encoder_name == "batm":
-            user_weight = self.user_encode_layer(history_news).transpose(1, 2)
+            user_weight = self.user_encode_layer(x).transpose(1, 2)
             # mask = input_feat["news_mask"].expand(self.topic_num, y.size(0), -1).transpose(0, 1) == 0
             # user_weight = torch.softmax(user_weight.masked_fill(mask, 0), dim=-1)  # fill zero entry with zero weight
-            user_vec = self.user_final(torch.matmul(user_weight, history_news))
+            user_vec = self.user_final(torch.matmul(user_weight, x))
             user_vector, user_weight = self.user_layer(user_vec)  # additive attention layer
+        elif self.user_encoder_name == "mha":
+            y = self.user_encode_layer(x, x, x, input_feat["history_mask"])[0]
+            user_vector, user_weight = self.user_layer(y)
         else:
-            user_vector, user_weight = self.user_layer(history_news)  # additive attention layer
+            user_vector, user_weight = self.user_layer(x)  # additive attention layer
         return {"user_vector": user_vector, "user_weight": user_weight}

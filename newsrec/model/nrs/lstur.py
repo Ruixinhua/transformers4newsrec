@@ -99,5 +99,5 @@ class LSTURRSModel(BaseNRS):
                 inplace=True,
             )
         else:  # default use last hidden output from GRU network
-            user_vector = self.user_encode_layer(packed_y)[1].squeeze(dim=0)
+            raise ValueError("user_embed_method is not set correctly")
         return {"user_vector": user_vector}

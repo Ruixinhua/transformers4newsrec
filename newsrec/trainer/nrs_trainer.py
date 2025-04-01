@@ -33,18 +33,19 @@ class NRSTrainer(Trainer):
             return init_model_class(model_name, model_config)
 
         train_args_dict = copy.deepcopy(TRAINING_ARGS)
-        train_args_dict.update({
+        train_args_dict.update(kwargs.get("train_args", {}))
+        train_args_dict.update(kwargs)
+        train_args = {k: v for k, v in train_args_dict.items() if hasattr(TrainingArguments, k)}
+        train_args.update({
+            "output_dir": kwargs.get("output_dir", f"{get_project_root(**kwargs)}/output_dir/{run_name}/"),
             "run_name": run_name,  # setup running name
             # setup logging directory
-            "logging_dir": f"{get_project_root()}/output_dir/{run_name}/logs/",
+            "logging_dir": f"{get_project_root(**kwargs)}/output_dir/{run_name}/logs/",
         })
-        train_args_dict.update(kwargs.get("train_args", {}))
-        train_args_dict["output_dir"] = kwargs.get("output_dir", f"{get_project_root()}/output_dir/{run_name}/")
-        train_args_dict.update({k: v for k, v in kwargs.items() if hasattr(TrainingArguments, k)})
         callbacks = []
-        if train_args_dict["evaluation_strategy"] == "epoch":
+        if train_args["evaluation_strategy"] == "epoch":
             callbacks.append(EarlyStoppingCallback(early_stopping_patience=kwargs.get("early_stopping_patience", 3)))
-        train_args = TrainingArguments(**train_args_dict)
+        train_args = TrainingArguments(**train_args)
         self.ignore_keys_for_eval = ["extra_output"]
         super(NRSTrainer, self).__init__(
             None, train_args, collate_fn, train_dataset, eval_dataset,
@@ -59,8 +60,14 @@ if __name__ == "__main__":
     config.setdefault("run_name", f"{config.get('model_name')}")
     trainer = NRSTrainer(**config)
     running_mode = config.get("running_mode")
+    resume_from_checkpoint = config.get("resume_from_checkpoint")
+    if resume_from_checkpoint == "None":
+        resume_from_checkpoint = None
     if running_mode == "train_only":
-        trainer.train(ignore_keys_for_eval=trainer.ignore_keys_for_eval)
+        trainer.train(
+            ignore_keys_for_eval=trainer.ignore_keys_for_eval,
+            resume_from_checkpoint=resume_from_checkpoint
+        )
         test_results = save_test_results(trainer, config)
     elif running_mode == "hyper_search":
         def set_hp_name(trial):
@@ -72,10 +79,10 @@ if __name__ == "__main__":
             return run_name
 
         def optuna_hp_space(trial):
-            search_space_all = OmegaConf.load(f"{get_project_root()}/hyper_search/base_nrs.yaml")
-            for path in os.listdir(f"{get_project_root()}/hyper_search"):
+            search_space_all = OmegaConf.load(f"{get_project_root(**config)}/hyper_search/base_nrs.yaml")
+            for path in os.listdir(f"{get_project_root(**config)}/hyper_search"):
                 if path.endswith(".yaml") and path != "base_nrs.yaml":
-                    search_space_all.merge_with(OmegaConf.load(f"{get_project_root()}/hyper_search/{path}"))
+                    search_space_all.merge_with(OmegaConf.load(f"{get_project_root(**config)}/hyper_search/{path}"))
             search_param_name = config.get("search_param_name", ["learning_rate"])
             params = {n: search_space_all[n] for n in search_param_name if n in search_space_all}
             search_space = {}

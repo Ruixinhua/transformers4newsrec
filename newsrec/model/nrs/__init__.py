@@ -6,6 +6,7 @@ from .npa import *
 # from .dkn import *
 from .glory import *
 from .batm import *
+from .batm_nr import *
 from .digat import *
 from .hierec import *
 from .user_as_graph import *

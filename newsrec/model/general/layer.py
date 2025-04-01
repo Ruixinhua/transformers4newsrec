@@ -7,7 +7,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import Sequential
 
 
 class ClickPredictor(nn.Module):
@@ -102,7 +101,7 @@ class MultiHeadAttentionAdv(nn.Module):
     http://nlp.seas.harvard.edu/2018/04/03/attention.html#attention
     """
 
-    def __init__(self, h, d_k, input_dim, dropout=0, use_flash_att=True):
+    def __init__(self, h, d_k, input_dim, dropout=0, use_flash_att=False):
         "Take in model size and number of heads."
         super(MultiHeadAttentionAdv, self).__init__()
         # We assume d_v always equals d_k
@@ -138,7 +137,7 @@ class MultiHeadAttentionAdv(nn.Module):
         :param key: batch_size, word_num, input_dim
         :param value: batch_size, word_num, input_dim
         :param mask: batch_size, word_num
-        :return: output: batch_size, word_num, input_dim; weight:
+        :return: output: batch_size, word_num, head_num * head_dim; weight:
         """
         if mask is not None:
             # Same mask applied to all h heads.
@@ -241,40 +240,41 @@ class BiAttentionLayer(nn.Module):
         self.topic_layer_name = model_args.get("topic_layer_name", "base_att")
         self.topic_num, self.topic_dim = model_args.get("topic_num", 50), model_args.get("topic_dim", 20)
         # self.topic_dim = model_args.get("topic_dim", self.topic_num * self.topic_dim)
-        self.embedding_dim = model_args.get("embedding_dim", 300)
+        self.input_feat_dim = model_args.get("input_feat_dim", 300)
+        self.output_feat_dim = model_args.get("output_feat_dim", self.input_feat_dim)
         self.hidden_dim = model_args.get("hidden_dim", 256)
         self.add_topic_evaluation = model_args.get("add_topic_evaluation", False)
         self.act_layer = activation_layer(model_args.get("act_layer", "tanh"))  # default use tanh
-        self.final = nn.Linear(self.embedding_dim, self.embedding_dim)
+        self.final = nn.Sequential(nn.Linear(self.input_feat_dim, self.output_feat_dim), nn.ReLU())
         if self.topic_layer_name == "base_att":
             self.topic_layer = nn.Sequential(
-                nn.Linear(self.embedding_dim, self.topic_num * self.topic_dim), self.act_layer,
+                nn.Linear(self.input_feat_dim, self.topic_num * self.topic_dim), self.act_layer,
                 nn.Linear(self.topic_num * self.topic_dim, self.topic_num)
             )
         elif self.topic_layer_name == "base_advanced":
             self.topic_layer = nn.Sequential(
                 # map to hidden dim
-                nn.Linear(self.embedding_dim, self.topic_num * self.hidden_dim), self.act_layer,
+                nn.Linear(self.input_feat_dim, self.topic_num * self.hidden_dim), self.act_layer,
                 # map to topic dim
                 nn.Linear(self.topic_num * self.hidden_dim, self.topic_num * self.topic_dim), self.act_layer,
                 # map to topic num
                 nn.Linear(self.topic_num * self.topic_dim, self.topic_num), activation_layer("sigmoid")
             )
         elif self.topic_layer_name == "base_topic_vector":
-            self.topic_layer = nn.Linear(self.embedding_dim, self.topic_num, bias=False)
+            self.topic_layer = nn.Linear(self.input_feat_dim, self.topic_num, bias=False)
         elif self.topic_layer_name == "variational_topic":
             self.topic_layer = nn.Sequential(
-                nn.Linear(self.embedding_dim, self.topic_num * self.hidden_dim, bias=True), self.act_layer,
+                nn.Linear(self.input_feat_dim, self.topic_num * self.hidden_dim, bias=True), self.act_layer,
                 nn.Linear(self.topic_num * self.hidden_dim, self.topic_num, bias=True)
             )
             self.logsigma_q_theta = nn.Sequential(
-                nn.Linear(self.embedding_dim, self.topic_num * self.hidden_dim, bias=True), self.act_layer,
+                nn.Linear(self.input_feat_dim, self.topic_num * self.hidden_dim, bias=True), self.act_layer,
                 nn.Linear(self.topic_num * self.hidden_dim, self.topic_num, bias=True)
             )
         else:
             raise ValueError("Specify correct variant name!")
 
-    def forward(self, news_embeddings, news_mask):
+    def forward(self, news_embeddings, news_mask=None):
         """
         Topic forward pass, return topic vector and topic weights
         """
@@ -293,9 +293,13 @@ class BiAttentionLayer(nn.Module):
             scores = (news_embeddings @ self.topic_layer.weight.transpose(0, 1)).transpose(1, 2)  # (N, H, S)
         else:
             scores = self.topic_layer(news_embeddings).transpose(1, 2)  # (N, H, S)
-        weights = torch.exp(scores) * news_mask.unsqueeze(dim=1)
+        if news_mask is not None:
+            weights = torch.exp(scores) * news_mask.unsqueeze(dim=1)
+        else:
+            weights = torch.exp(scores)
         topic_weight = weights / (torch.sum(weights, dim=-1, keepdim=True) + 1e-8)
         topic_vector = self.final(torch.matmul(topic_weight, news_embeddings))  # (N, H, E)
+        # topic_vector = torch.matmul(topic_weight, news_embeddings)
         out_dict.update({"topic_vector": topic_vector, "topic_weight": topic_weight})
         return out_dict
 
@@ -394,17 +398,23 @@ def activation_layer(act_name):
 
 
 class LateFusion(nn.Module):
-    def __init__(self, fusion_method, head_num, head_dim):
+    def __init__(self, fusion_method, input_feat_dim):
         super().__init__()
 
-        self.news_dim = head_num * head_dim
+        self.encoding_dim = input_feat_dim
         self.method = fusion_method
 
         if self.method == 'weighted':
-            self.linear = nn.Linear(self.news_dim, self.news_dim)
+            self.linear = nn.Linear(self.encoding_dim, self.encoding_dim)
 
     def forward(self, his_emb, cand_emb, mask=None):
-
+        """
+        Compute click score based on user history and candidate news embeddings
+        :param his_emb: shape (batch_size, his_size, encoding_dim)
+        :param cand_emb: shape (batch_size, cand_size, encoding_dim)
+        :param mask: shape (batch_size, his_size)
+        :return:
+        """
         dot_product = torch.matmul(cand_emb, his_emb.permute(0, 2, 1))
 
         if self.method == 'weighted':
@@ -442,28 +452,22 @@ class LateFusion(nn.Module):
             score = dot_product_masked.mean(dim=-1)
 
         else:
-            raise TypeError
+            raise ValueError(f"Invalid fusion method: {self.method}")
 
         return score
 
 
-class FusionAggregator(nn.Module):
-    def __init__(self, head_num, head_dim, user_feature_num):
-        super().__init__()
-        self.news_dim = head_num * head_dim
-        self.user_feature_num = user_feature_num
-        input_dim = self.news_dim * user_feature_num
-        self.mlp = Sequential('a', [
-            (lambda a: torch.cat(a, dim=-1), f'a -> x'),
+class RMSNorm(nn.Module):
+    def __init__(self, input_dim: int, epsilon=1e-6):
+        super(RMSNorm, self).__init__()
+        self.input_dim = input_dim
+        self.epsilon = epsilon
+        self.weight = nn.Parameter(torch.ones(input_dim))
+        self.register_parameter('weight', self.weight)
 
-            nn.Linear(input_dim, self.news_dim * 2),
-            nn.LeakyReLU(0.2),
+    def _norm(self, x):
+        return x / torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.epsilon)
 
-            nn.Linear(self.news_dim * 2, int(self.news_dim * 1.5)),
-            nn.LeakyReLU(0.2),
-
-            nn.Linear(int(self.news_dim * 1.5), self.news_dim),
-        ])
-
-    def forward(self, user_vectors):
-        return self.mlp(user_vectors)
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight

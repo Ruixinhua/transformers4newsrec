@@ -13,7 +13,7 @@ from datasets import Dataset as HFDataset
 from newsrec.utils import get_project_root
 
 
-def load_dataset_from_csv(data_name, cache_dir=None):
+def load_dataset_from_csv(data_name, cache_dir=None, **kwargs):
     """
     Load HFDataset object from remote csv file
     :param data_name: in the format of {data}_{subset_name}, e.g. train_small, news_small
@@ -21,13 +21,14 @@ def load_dataset_from_csv(data_name, cache_dir=None):
     :return: HFDataset object
     """
     if cache_dir is None:
-        cache_dir = f"{get_project_root()}/cached/MIND"
+        cache_dir = f"{get_project_root(**kwargs)}/cached/MIND"
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     data_file = f"{data_name}.csv"
     if (cache_dir / data_file).exists():
         df = pd.read_csv(cache_dir / data_file)
     else:
+        print(f"{cache_dir / data_file} not found, loading from remote")
         df = pd.read_csv(f"hf://datasets/Rui98/mind/{data_file}")
         df.to_csv(cache_dir / data_file, index=False)
     df.fillna("", inplace=True)
@@ -35,7 +36,7 @@ def load_dataset_from_csv(data_name, cache_dir=None):
     return dataset
 
 
-def load_embedding_from_glove_name(glove_name=None):
+def load_embedding_from_glove_name(glove_name=None, **kwargs):
     """
     Load glove embedding from remote or cached parquet file
     :param glove_name: default glove name, glove_6b_300d
@@ -43,10 +44,11 @@ def load_embedding_from_glove_name(glove_name=None):
     """
     if glove_name is None:
         glove_name = "glove_6b_300d"
-    glove_path = Path(f"{get_project_root()}/cached/{glove_name}.parquet")
+    glove_path = Path(f"{get_project_root(**kwargs)}/cached/{glove_name}.parquet")
     if glove_path.exists():
         glove_embeds = pd.read_parquet(glove_path)
     else:
+        print(f"{glove_path} not found, loading from remote")
         glove_embeds = pd.read_parquet(f"hf://datasets/Rui98/glove/{glove_name}.parquet")
         glove_embeds.to_parquet(glove_path, index=False)
     return glove_embeds
@@ -97,7 +99,9 @@ def load_tokenizer(**kwargs):
     if embedding_type == "glove":
         subset_name = kwargs.get("subset_name", "small")
         use_cached_tokenizer = kwargs.get("use_cached_tokenizer", True)
-        default_tokenizer_path = Path(f"{get_project_root()}/cached/{embedding_type}_{subset_name}_tokenizer.json")
+        default_tokenizer_path = Path(
+            f"{get_project_root(**kwargs)}/cached/{embedding_type}_{subset_name}_tokenizer.json"
+        )
         if default_tokenizer_path.exists() and use_cached_tokenizer:
             # load tokenizer from cached file
             from tokenizers import Tokenizer
@@ -109,7 +113,7 @@ def load_tokenizer(**kwargs):
             from tokenizers.models import WordLevel
             from tokenizers.pre_tokenizers import Whitespace, Punctuation, Digits, Sequence
             from tokenizers.normalizers import Lowercase, NFD, StripAccents
-            news_data = load_dataset_from_csv(f"news_{subset_name}")
+            news_data = load_dataset_from_csv(f"news_{subset_name}", **kwargs)
             news_text = list(news_data["title"]) + list(news_data["abstract"]) + list(news_data["body"])
             tokenizer = Tokenizer(WordLevel(unk_token="[UNK]", vocab=None))
             tokenizer.pre_tokenizer = Sequence([Whitespace(), Punctuation(), Digits()])
@@ -140,12 +144,12 @@ def load_glove_embedding_matrix(**kwargs):
     """
     glove_name = kwargs.get("glove_name", "glove_6b_300d")
     subset_name = kwargs.get("subset_name", "small")
-    glove_embedding_path = Path(f"{get_project_root()}/cached/{glove_name}_{subset_name}.npy")
+    glove_embedding_path = Path(f"{get_project_root(**kwargs)}/cached/{glove_name}_{subset_name}.npy")
     use_cached_glove_embed = kwargs.get("use_cached_glove_embed", True)
     if glove_embedding_path.exists() and use_cached_glove_embed:
         # load embedding matrix from cached file
         return np.load(glove_embedding_path.as_posix())
-    glove_embeds = load_embedding_from_glove_name(glove_name=glove_name)
+    glove_embeds = load_embedding_from_glove_name(**kwargs)
     glove_embeds.set_index("token", inplace=True)
     glove_tokenizer = load_tokenizer(embedding_type="glove", subset_name=subset_name)
     glove_vocab = glove_tokenizer.get_vocab()
@@ -227,7 +231,7 @@ class FeatureMapper:
             self.entity_feature = [self.entity_feature] if isinstance(self.entity_feature, str) else self.entity_feature
             self.entity_dict = load_entity_dict(self.subset_name, self.entity_feature)
             self.feature_dim += (self.entity_length * len(self.entity_feature))
-        news_data = load_dataset_from_csv(f"news_{self.subset_name}")
+        news_data = load_dataset_from_csv(f"news_{self.subset_name}", **kwargs)
         self.feature_matrix = np.zeros((len(news_data) + 1, self.feature_dim), dtype=np.int32)
         category, subvert, nid = list(news_data["category"]), list(news_data["subvert"]), list(news_data["nid"])
         self.category_mapper = {c: i + 1 for i, c in enumerate(set(category))}
@@ -288,7 +292,9 @@ def load_feature_mapper(**kwargs):
     tokenizer_name = kwargs.get("embedding_type", "glove")
     if tokenizer_name == "plm":  # pre-trained LM: use corresponding embedding model name
         tokenizer_name = kwargs.get("embedding_model")
-    feature_mapper_path = Path(f"{get_project_root()}/cached/FM_{tokenizer_name}_{embed_dim}d_{subset_name}.bin")
+    feature_mapper_path = Path(
+        f"{get_project_root(**kwargs)}/cached/FM_{tokenizer_name}_{embed_dim}d_{subset_name}.bin"
+    )
     feature_mapper = None
     if feature_mapper_path.exists() and use_cached_feature_mapper:
         with open(feature_mapper_path, "rb") as f:
@@ -314,7 +320,7 @@ def load_user_history_mapper(**kwargs):
     max_history_size = kwargs.get("max_history_size")
     if subset_name is None or max_history_size is None:
         raise ValueError("subset_name and max_history_size must be provided")
-    user_interaction = load_dataset_from_csv(f"user_interaction_{subset_name}")
+    user_interaction = load_dataset_from_csv(f"user_interaction_{subset_name}", **kwargs)
     user_history_mapper = np.zeros((len(user_interaction) + 1, max_history_size), dtype=np.int32)
     # fetch uid and history to two lists
     history_nid, history_uid = list(user_interaction["history"]), list(user_interaction["uid"])
@@ -328,7 +334,7 @@ def load_user_history_mapper(**kwargs):
 
 def save_test_results(trainer, config):
     test_results_filename = config.get("test_results_filename", f"test_results")
-    default_results_path = f"{config.get('root_dir', get_project_root())}/results/{test_results_filename}.csv"
+    default_results_path = f"{config.get('root_dir', get_project_root(**config))}/results/{test_results_filename}.csv"
     os.makedirs(os.path.dirname(default_results_path), exist_ok=True)
     test_results_path = config.get("test_results_path", default_results_path)
     # load results_path first
@@ -339,6 +345,7 @@ def save_test_results(trainer, config):
     from newsrec.data import UserInteractionDataset
     test_dataset = UserInteractionDataset(split="test", **config)
     results = trainer.evaluate(test_dataset, metric_key_prefix="test")
+    print(results)
     saved_key_columns = config.get("saved_key_columns", ["run_name", "model_name", "text_feature", "subset_name"])
     results.update({k: config.get(k) for k in saved_key_columns})
     # save the dictionary of evaluation results to the result path with

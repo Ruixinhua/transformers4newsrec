@@ -99,7 +99,7 @@ def extract_topics_base(model, word_seq, device):
     with torch.no_grad():
         word_feat = {"news": torch.tensor(word_seq).unsqueeze(0).to(device), "evaluate_topic": True,
                      "news_mask": torch.ones(len(word_seq)).unsqueeze(0).to(device)}
-        topic_dict = model.extract_topic(word_feat)  # (B, H, N)
+        topic_dict = model.feature_extractor(word_feat)  # (B, H, N)
         topic_weight = topic_dict["topic_weight"]
         topic_dist[:, word_seq] = topic_weight.squeeze().cpu().data
     return topic_dist
